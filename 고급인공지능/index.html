@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>오늘의 뉴스</title>
+</head>
+<body>
+    <h1>맞춤형 뉴스 알림 설정</h1>
+    <button id="enable-alarm-btn">실시간 뉴스 알림 켜기</button>
+
+    <script>
+        document.getElementById('enable-alarm-btn').addEventListener('click', () => {
+            if (!("Notification" in window)) {
+                alert("이 브라우저는 알림을 지원하지 않습니다.");
+                return;
+            }
+
+            Notification.requestPermission().then(permission => {
+                if (permission === "granted") {
+                    alert("알림이 허용되었습니다.");
+                } else {
+                    alert("알림이 차단되었습니다.");
+                }
+            });
+        });
+
+        function showNewsNotification(title, summary, url) {
+            if (Notification.permission === "granted") {
+                const options = {
+                    body: summary,
+                };
+                const notification = new Notification(title, options);
+                
+                notification.onclick = function(event) {
+                    event.preventDefault();
+                    window.open(url, '_blank');
+                };
+            }
+        }
+    </script>
+</body>
+</html>
