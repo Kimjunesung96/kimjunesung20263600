@@ -11,60 +11,52 @@ class CalculatorUI(QWidget):
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowTitle('Emergency Calculator')
+        self.setWindowTitle('Calculator')
         self.setFixedSize(320, 500)
         self.setStyleSheet(STYLES['window'])
         
-        self.layout = QVBoxLayout()
-        self.layout.setContentsMargins(15, 20, 15, 20)
-        self.setLayout(self.layout)
+        layout = QVBoxLayout()
+        layout.setContentsMargins(15, 20, 15, 20)
+        self.setLayout(layout)
         
         self.display = QLabel('0')
         self.display.setAlignment(Qt.AlignRight | Qt.AlignBottom)
         self.display.setStyleSheet(STYLES['display'])
-        self.layout.addWidget(self.display)
+        layout.addWidget(self.display)
         
-        self.grid_layout = QGridLayout()
-        self.grid_layout.setSpacing(10)
-        self.layout.addLayout(self.grid_layout)
+        grid_layout = QGridLayout()
+        grid_layout.setSpacing(10)
+        layout.addLayout(grid_layout)
         
-        # constants.py에서 배열을 가져와서 UI 생성 (하드코딩 제거)
-        for text, row, col, row_span, col_span in BUTTON_LAYOUT:
+        # 🌟 타입(btn_type)으로만 스타일을 판단합니다.
+        for text, row, col, row_span, col_span, btn_type in BUTTON_LAYOUT:
             button = QPushButton(text)
             button.setMinimumHeight(60)
             
-            if text in ['/', '*', '-', '+', '=']:
-                button.setStyleSheet(STYLES['operator'])
-            elif text in ['AC', '+/-', '%']:
-                button.setStyleSheet(STYLES['function'])
-            elif text == '0':
-                button.setStyleSheet(STYLES['zero'])
-            else:
-                button.setStyleSheet(STYLES['number'])
-                
-            self.grid_layout.addWidget(button, row, col, row_span, col_span)
-            button.clicked.connect(lambda checked, t=text: self.on_button_click(t))
+            style = STYLES.get(btn_type, '')
+            button.setStyleSheet(style)
+            
+            grid_layout.addWidget(button, row, col, row_span, col_span)
+            button.clicked.connect(
+                lambda checked, t=text, b=btn_type: self.on_button_click(t, b)
+            )
 
-    def on_button_click(self, text):
-        if text.isdigit() or text == '.':
+    # 🌟 UI는 글씨(%, +/- 등)를 비교하지 않고, 엔진한테 그대로 토스!
+    def on_button_click(self, text, btn_type):
+        if btn_type in ['number', 'zero'] or text == '.':
             new_text = self.engine.input_character(text)
-            self.display.setText(new_text)
-        elif text in ['+', '-', '*', '/']:
+            
+        elif btn_type == 'operator':
             new_text = self.engine.input_operator(text)
-            self.display.setText(new_text)
-        elif text == '=':
+            
+        elif btn_type == 'equal':
             new_text = self.engine.calculate()
-            self.display.setText(new_text)
-        elif text == 'AC':
-            new_text = self.engine.clear()
-            self.display.setText(new_text)
-        elif text == '+/-':
-            new_text = self.engine.toggle_sign()
-            self.display.setText(new_text)
-        elif text == '%':
-            new_text = self.engine.input_operator('/')
-            self.display.setText(new_text)
-            new_text = self.engine.input_character('100')
-            self.display.setText(new_text)
-            new_text = self.engine.calculate()
-            self.display.setText(new_text)
+            
+        # 기능키면 어떤 기능이든 글자 그대로 엔진의 execute_function에 던짐
+        elif btn_type in ['function', 'clear']:
+            new_text = self.engine.execute_function(text)
+            
+        else:
+            new_text = self.display.text()
+            
+        self.display.setText(new_text)
