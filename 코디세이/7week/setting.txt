@@ -1,0 +1,9 @@
+{
+    "os": true,
+    "os_version": true,
+    "cpu_type": true,
+    "cpu_cores": true,
+    "memory_size": true,
+    "cpu_usage": true,
+    "memory_usage": true
+}

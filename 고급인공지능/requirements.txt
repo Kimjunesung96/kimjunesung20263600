@@ -1,0 +1,17 @@
+# API Server & Backend
+fastapi
+uvicorn
+pydantic
+python-multipart
+
+# AI & LLM
+google-generativeai
+
+# Data Processing & Scraper
+requests
+beautifulsoup4
+pandas
+
+# Desktop UI (Floating Bot)
+customtkinter
+pillow
