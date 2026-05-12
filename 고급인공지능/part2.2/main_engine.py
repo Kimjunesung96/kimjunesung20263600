@@ -2,7 +2,7 @@ import schedule
 import time
 import requests
 import datetime
-import pymysql
+import sqlite3
 import xml.etree.ElementTree as ET
 import re
 
@@ -10,13 +10,19 @@ import re
 # DB 연결 함수
 # ---------------------------------------------------------
 def get_db_connection():
-    return pymysql.connect(
-        host='localhost',
-        user='root',
-        password='rla1dbs2', # <--- 아까 성공한 진짜 비밀번호로 변경!
-        db='news_db',
-        charset='utf8mb4'
-    )
+    conn = sqlite3.connect('news.db')
+    # 테이블이 없으면 최초 1회 자동 생성하는 똑똑한 코드 추가
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS news (
+            id TEXT PRIMARY KEY,
+            category_code TEXT,
+            title TEXT,
+            url TEXT,
+            ai_summary TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    return conn
 
 def clean_html(raw_html):
     cleanr = re.compile('<.*?>')
@@ -58,9 +64,10 @@ def fetch_all_categories():
                 news_id = generate_news_id(cat_code, sequence)
                 
                 # INSERT IGNORE로 중복 수집 방지
+# INSERT OR IGNORE로 중복 수집 방지 (SQLite 전용 문법)
                 sql = """
-                    INSERT IGNORE INTO news (id, category_code, title, url, ai_summary) 
-                    VALUES (%s, %s, %s, %s, %s)
+                INSERT OR IGNORE INTO news (id, category_code, title, url, ai_summary)
+                VALUES (?, ?, ?, ?, ?)
                 """
                 cursor.execute(sql, (news_id, cat_code, title, link, ai_summary))
                 sequence += 1

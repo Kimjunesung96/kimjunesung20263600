@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-import pymysql
+import sqlite3
 import json
 import os
 
@@ -18,10 +18,9 @@ app.add_middleware(
 CONFIG_FILE = "config.json"
 
 def get_db_connection():
-    return pymysql.connect(
-        host='localhost', user='root', password='rla1dbs2', 
-        db='news_db', charset='utf8mb4', cursorclass=pymysql.cursors.DictCursor
-    )
+    conn = sqlite3.connect('news.db')
+    conn.row_factory = sqlite3.Row # 결과를 MySQL처럼 딕셔너리 형태로 쓰게 해주는 마법
+    return conn
 
 # ---------------------------------------------------------
 # 💡 API: 알람 주기 설정 불러오기 및 저장하기
@@ -49,14 +48,15 @@ def get_news(category_code: str):
     cursor = conn.cursor()
     try:
         sql = """
-            SELECT id, category_code, title, url, ai_summary, created_at 
-            FROM news WHERE category_code = %s ORDER BY created_at DESC LIMIT 10
+        SELECT id, category_code, title, url, ai_summary, created_at
+        FROM news WHERE category_code = ? ORDER BY created_at DESC LIMIT 10
         """
         cursor.execute(sql, (category_code,))
-        news_list = cursor.fetchall()
-        for news in news_list:
-            if news['created_at']:
-                news['created_at'] = news['created_at'].strftime("%Y-%m-%d %H:%M")
+        
+        # SQLite의 Row 객체를 리액트가 알아들을 수 있는 순수 딕셔너리로 변환
+        news_list = [dict(row) for row in cursor.fetchall()]
+        
+        # SQLite는 날짜를 처음부터 예쁜 문자열로 저장하므로 .strftime 변환 작업이 필요 없습니다! (삭제)
         return {"status": "success", "data": news_list}
     except Exception as e:
         return {"status": "error", "message": str(e)}

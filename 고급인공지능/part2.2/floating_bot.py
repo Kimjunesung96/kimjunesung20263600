@@ -1,5 +1,5 @@
 import tkinter as tk
-import pymysql
+import sqlite3
 import threading
 import time
 import webbrowser
@@ -21,13 +21,11 @@ def get_alarm_interval():
 
 def get_top_10_news():
     try:
-        conn = pymysql.connect(
-            host='localhost', user='root', password='rla1dbs2',
-            db='news_db', charset='utf8mb4', cursorclass=pymysql.cursors.DictCursor
-        )
-        with conn.cursor() as cursor:
-            cursor.execute("SELECT title, url FROM news ORDER BY created_at DESC LIMIT 30")
-            result = list(cursor.fetchall())
+        conn = sqlite3.connect('news.db')
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT title, url FROM news ORDER BY created_at DESC LIMIT 30")
+        result = [dict(row) for row in cursor.fetchall()]
         conn.close()
         
         if len(result) > 10:
@@ -218,13 +216,11 @@ def fetch_news_loop():
     time.sleep(2)
     while True:
         try:
-            conn = pymysql.connect(
-                host='localhost', user='root', password='rla1dbs2',
-                db='news_db', charset='utf8mb4', cursorclass=pymysql.cursors.DictCursor
-            )
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT title, url FROM news ORDER BY created_at DESC LIMIT 30")
-                hourly_30_news = list(cursor.fetchall())
+            conn = sqlite3.connect('news.db')
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT title, url FROM news ORDER BY created_at DESC LIMIT 30")
+            hourly_30_news = [dict(row) for row in cursor.fetchall()]
             conn.close()
         except Exception as e:
             hourly_30_news = []
