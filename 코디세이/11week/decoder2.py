@@ -1,5 +1,5 @@
-def caesar_cipher_matrix_logic(target_text):
-    print('=== 카이사르 암호 해독: 2D 매트릭스 (List of Lists) 방식 ===\n')
+def caesar_cipher_decode(target_text):
+    print('=== 카이사르 암호 해독: 2D 매트릭스 방식 ===\n')
     
     # 1. 26행(Shift) x 원본길이(열) 크기의 2차원 리스트(행렬) 생성
     matrix = [['' for _ in range(len(target_text))] for _ in range(26)]
@@ -17,14 +17,14 @@ def caesar_cipher_matrix_logic(target_text):
             else:
                 matrix[row][col] = char
         
-        # 3. 완성된 한 층(row)의 토큰들을 문자열로 결합 (join)
+        # 3. 완성된 한 층(row)의 토큰들을 문자열로 결합
         decoded_text = ''.join(matrix[row])
         decoded_results[shift] = decoded_text
         print(f'[{shift:2d}번 굴림] 매트릭스 조립 결과: {decoded_text}')
 
     print('\n' + '=' * 50)
     
-    # 4. 정답 입력 및 예외 처리 (제약 사항 준수)
+    # 4. 정답 입력 및 파일 저장 (예외 처리 포함)
     try:
         user_choice = int(input('가장 말이 되는 문장의 [굴린 횟수]를 입력하세요: '))
         
@@ -44,7 +44,6 @@ def caesar_cipher_matrix_logic(target_text):
 
 def main():
     try:
-        # password.txt 파일 읽기 및 예외 처리
         with open('password.txt', 'r') as f:
             target_text = f.read().strip()
             
@@ -52,8 +51,8 @@ def main():
             print('[오류] password.txt 파일이 비어 있습니다.')
             return
             
-        # 2D 매트릭스 로직 호출
-        caesar_cipher_matrix_logic(target_text)
+        # 요구사항에 명시된 함수 이름으로 호출
+        caesar_cipher_decode(target_text)
         
     except FileNotFoundError:
         print('[오류] password.txt 파일을 찾을 수 없습니다.')
