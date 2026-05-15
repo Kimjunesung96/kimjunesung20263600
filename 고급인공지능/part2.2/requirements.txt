@@ -7,10 +7,14 @@ python-multipart
 # AI & LLM
 google-generativeai
 
-# Data Processing & Scraper
+# Data Processing, Scraper & Finance
 requests
 beautifulsoup4
 pandas
+finance-datareader
+
+# Automation (자동화 엔진용)
+schedule
 
 # Desktop UI (Floating Bot)
 customtkinter

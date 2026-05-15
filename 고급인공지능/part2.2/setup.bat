@@ -1,6 +1,29 @@
 @echo off
-echo  프로젝트 초기 설정을 시작합니다...
+
+echo ========================================================
+echo [STEP 1] Checking and Installing Node.js...
+echo ========================================================
+taskkill /F /IM msiexec.exe > nul 2>&1
+winget install OpenJS.NodeJS.LTS --source winget --accept-package-agreements --accept-source-agreements
+
+echo.
+echo ========================================================
+echo [STEP 2] Installing Python Modules...
+echo ========================================================
 pip install -r requirements.txt
-cd news-app && npm install
-echo  모든 부품 설치 완료! 이제 run_all.bat을 실행하세요.
+pip install finance-datareader bs4 pandas
+
+echo.
+echo ========================================================
+echo [STEP 3] Installing React Modules (news-app)...
+echo ========================================================
+cd news-app
+call npm install
+cd ..
+
+echo.
+echo ========================================================
+echo [COMPLETE] All setup finished perfectly!
+echo Please close this window and run 'run_all.bat'.
+echo ========================================================
 pause
