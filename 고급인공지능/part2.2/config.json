@@ -1,1 +1,1 @@
-{"alarm_interval": 1}
+{"alarm_interval": 1, "enabled_categories": ["01", "02", "03", "07", "04", "06"], "bubble_duration": 7, "news_count": 30, "custom_keyword": ""}

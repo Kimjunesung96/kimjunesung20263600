@@ -33,16 +33,21 @@ def generate_news_id(category_code, sequence):
     return f"{now.strftime('%y%m%d')}{category_code}{now.strftime('%H')}{str(sequence).zfill(3)}"
 
 # ---------------------------------------------------------
-# 3개 분야(IT, 경제, 사회) 자동 수집 파이프라인
+# 8개 분야 자동 수집 파이프라인
 # ---------------------------------------------------------
 def fetch_all_categories():
     print(f"\n[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 📡 전 분야 뉴스 수집 시작...")
     
-    # 분야별 구글 뉴스 RSS 주소
+    # 분야별 구글 뉴스 RSS 주소 (8종 풀세트)
     RSS_URLS = {
         "01": "https://news.google.com/rss/headlines/section/topic/TECHNOLOGY?hl=ko&gl=KR&ceid=KR:ko", # IT/테크
         "02": "https://news.google.com/rss/headlines/section/topic/BUSINESS?hl=ko&gl=KR&ceid=KR:ko",   # 경제
-        "03": "https://news.google.com/rss/headlines/section/topic/NATION?hl=ko&gl=KR&ceid=KR:ko"      # 사회/정치
+        "03": "https://news.google.com/rss/headlines/section/topic/NATION?hl=ko&gl=KR&ceid=KR:ko",     # 사회
+        "04": "https://news.google.com/rss/headlines/section/topic/WORLD?hl=ko&gl=KR&ceid=KR:ko",      # 세계
+        "05": "https://news.google.com/rss/headlines/section/topic/ENTERTAINMENT?hl=ko&gl=KR&ceid=KR:ko", # 연예
+        "06": "https://news.google.com/rss/headlines/section/topic/SPORTS?hl=ko&gl=KR&ceid=KR:ko",      # 스포츠
+        "07": "https://news.google.com/rss/headlines/section/topic/SCIENCE?hl=ko&gl=KR&ceid=KR:ko",     # 과학
+        "08": "https://news.google.com/rss/headlines/section/topic/HEALTH?hl=ko&gl=KR&ceid=KR:ko"       # 건강
     }
     
     conn = get_db_connection()
@@ -63,8 +68,7 @@ def fetch_all_categories():
                 ai_summary = clean_html(raw_desc) if raw_desc else "요약 없음"
                 news_id = generate_news_id(cat_code, sequence)
                 
-                # INSERT IGNORE로 중복 수집 방지
-# INSERT OR IGNORE로 중복 수집 방지 (SQLite 전용 문법)
+                # INSERT OR IGNORE로 중복 수집 방지 (SQLite 전용 문법)
                 sql = """
                 INSERT OR IGNORE INTO news (id, category_code, title, url, ai_summary)
                 VALUES (?, ?, ?, ?, ?)
@@ -73,7 +77,7 @@ def fetch_all_categories():
                 sequence += 1
                 
         conn.commit()
-        print("✅ 3개 분야 모두 수집 및 DB 저장 완료!")
+        print("✅ 8개 분야 모두 수집 및 DB 저장 완료!")  # ✅ 수정: 3개 → 8개
         
     except Exception as e:
         print(f"❌ 수집 에러 발생: {e}")
