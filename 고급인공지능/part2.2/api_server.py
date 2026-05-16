@@ -93,7 +93,7 @@ def startup_event():
     cursor.execute('CREATE TABLE IF NOT EXISTS favorite_stocks (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, ticker TEXT NOT NULL UNIQUE)')
     
     cursor.execute("SELECT COUNT(*) FROM favorite_stocks")
-    if cursor.fetchone() == 0:
+    if cursor.fetchone()[0] == 0:
         cursor.execute("INSERT INTO favorite_stocks (name, ticker) VALUES ('애플', 'AAPL')")
         cursor.execute("INSERT INTO favorite_stocks (name, ticker) VALUES ('테슬라', 'TSLA')")
         cursor.execute("INSERT INTO favorite_stocks (name, ticker) VALUES ('삼성전자', '005930.KS')")
@@ -241,13 +241,13 @@ def add_favorite_stock(item: StockItem):
             df_krx = get_krx()
             krx_match = df_krx[df_krx['Name'] == item.name]
             if not krx_match.empty:
-                row = krx_match.iloc
+                row = krx_match.iloc[0]
                 ticker = f"{row['Code']}.KS" if row['Market'] == 'KOSPI' else f"{row['Code']}.KQ"
             else:
                 en_name = KR_TO_EN.get(item.name, item.name)
                 df_us = get_us()
                 us_match = df_us[df_us['Name'].str.contains(en_name, case=False, na=False, regex=False)]
-                if not us_match.empty: ticker = us_match.iloc['Symbol']
+                if not us_match.empty: ticker = us_match.iloc[0]['Symbol']
                 else:
                     if "비트" in item.name or "bitcoin" in item.name.lower(): ticker = "BTC-USD"
                     elif "이더" in item.name or "ethereum" in item.name.lower(): ticker = "ETH-USD"
