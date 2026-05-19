@@ -71,11 +71,12 @@ def show_bubble(title, url, duration_ms, auto_hide=True):
     bubble_win.configure(bg='magenta')
     bubble_win.attributes("-transparentcolor", "magenta")
     
-    short_title = title[:30] + "..." if len(title) > 30 else title
-    
     if url == "TIMER": header_text, bg_color, fg_color = "⏳ [타이머 종료!]", "#ffeb3b", "#d32f2f"
     elif url == "ALARM": header_text, bg_color, fg_color = "⏰ [알람 시간입니다!]", "#fce4ec", "#c2185b"
+    elif url == "WEATHER": header_text, bg_color, fg_color = "⛅ [오늘의 날씨 브리핑]", "#e0f7fa", "#006064"
     else: header_text, bg_color, fg_color = "🔔 [최신 뉴스 브리핑!]", "#e8f0fe", "#1a73e8"
+
+    short_title = title if url in ["ALARM", "TIMER", "WEATHER"] else (title[:30] + "..." if len(title) > 30 else title)
 
     lbl = tk.Label(bubble_win, text=f"{header_text}\n{short_title}", bg=bg_color, fg=fg_color, font=("맑은 고딕", 9, "bold"), wraplength=200, relief="solid", bd=2, padx=10, pady=10, cursor="hand2")
     lbl.pack()
@@ -90,7 +91,6 @@ def show_bubble(title, url, duration_ms, auto_hide=True):
     if bx + bw > sw: bx = sw - bw - 5
     if bx < 0: bx = 5
     
-    # 💡 [핵심] 머리 위에 떠 있는 모든 타워들 중 '가장 높은 곳(y좌표가 가장 작은 값)'을 찾습니다!
     highest_y = ry
     if bot.todo_win and bot.todo_win.winfo_exists(): 
         highest_y = min(highest_y, bot.todo_win.winfo_y())
@@ -272,7 +272,6 @@ def open_toolbar_menu():
         else: tk.Button(bar_frame, text="🛑 정지", command=lambda: [bot.stop_timer(), open_and_close("", "toolbar")], **btn_style).pack(side="left", padx=3)
         tk.Button(bar_frame, text="⏰ 알람", command=lambda: [bot.set_alarm(), open_and_close("", "toolbar")], **btn_style).pack(side="left", padx=3)
         
-        # 💡 [핵심] 리모컨 버튼 5총사 정렬 (달력, 캡처, 폴더, 주식, 닫기)
         tk.Button(bar_frame, text="📅 달력", command=bot.toggle_todo_bubbles, **btn_style).pack(side="left", padx=3)
         tk.Button(bar_frame, text="📸 캡처", command=lambda: [open_and_close("", "toolbar"), bot.start_screenshot()], **btn_style).pack(side="left", padx=3)
         tk.Button(bar_frame, text="📁 폴더", command=bot.toggle_folder_bubbles, **btn_style).pack(side="left", padx=3)
@@ -304,7 +303,7 @@ def toggle_all_menus(event=None):
 
 def open_and_close(url, win_type):
     global history_win, bubble_win, toolbar_win
-    if url and url not in ["TIMER", "ALARM"]: webbrowser.open(url) 
+    if url and url not in ["TIMER", "ALARM", "WEATHER"]: webbrowser.open(url) 
     if win_type in ["history", "toolbar"]:
         if history_win: history_win.destroy(); history_win = None
         if toolbar_win: toolbar_win.destroy(); toolbar_win = None
@@ -332,7 +331,6 @@ def on_drag(event):
         x, y = root.winfo_x() - face_label._drag_start_x + event.x, root.winfo_y() - face_label._drag_start_y + event.y
         root.geometry(f"+{x}+{y}")
         
-        # 💡 [핵심] 로봇을 끌고 다닐 때 머리 위 타워들도 함께 졸졸 따라오게 만듭니다!
         bot.update_todo_position()
         if hasattr(bot, 'update_folder_position'): bot.update_folder_position() 
         if hasattr(bot, 'update_stock_position'): bot.update_stock_position()
@@ -358,15 +356,30 @@ def fetch_news_loop():
 # ---------------------------------------------------------
 # 윈도우 초기화 및 실행
 # ---------------------------------------------------------
+import ctypes
+try:
+    # 💡 윈도우 배율 100% 강제 인식 (좌표 꼬임 방지 안경!)
+    ctypes.windll.user32.SetProcessDPIAware()
+except:
+    pass
+
 root = tk.Tk()
-root.geometry("+1500+800") 
+
+# 💡 어떤 모니터든 가로/세로 길이를 알아내서 무조건 우측 하단 150px 위치에 자동 배치!
+screen_width = root.winfo_screenwidth()
+screen_height = root.winfo_screenheight()
+x_pos = screen_width - 150
+y_pos = screen_height - 150
+root.geometry(f"+{x_pos}+{y_pos}") 
+
 root.overrideredirect(True)
 root.attributes("-topmost", True)
-root.configure(bg='magenta')
-root.attributes("-transparentcolor", "magenta")
+root.configure(bg='#202124') # ✅ 깔끔한 다크모드 배경
+# 투명 마법은 과감하게 삭제!
 
-face_label = tk.Label(root, text="🤖", font=("Arial", 45), bg="magenta", cursor="fleur")
-face_label.pack()
+# 로봇 얼굴 배경도 다크모드로!
+face_label = tk.Label(root, text="🤖", font=("Arial", 45), bg="#202124", fg="white", cursor="fleur")
+face_label.pack(side="bottom")
 
 bot = AssistantFeatures(root, face_label, show_bubble)
 

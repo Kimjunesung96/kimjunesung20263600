@@ -1,37 +1,121 @@
-# ==========================================
-# 💡 주식 데이터 어댑터 (수도관 교체용 파일)
-# ==========================================
-# 나중에 유료 API(Polygon, 키움증권 등)로 갈아끼울 때는 
-# 이 파일 안의 내용만 유료 API 호출 방식으로 싹 바꾸면 됩니다!
-# (단, 맨 아래 반환하는 return 딕셔너리 모양만 똑같이 유지하세요)
-
 import yfinance as yf
+import math
+import requests
+from bs4 import BeautifulSoup
 
-def get_realtime_stock(ticker):
+
+def fix_nan(data):
+    if isinstance(data, float) and math.isnan(data): return 0
+    if isinstance(data, dict): return {k: fix_nan(v) for k, v in data.items()}
+    if isinstance(data, list): return [fix_nan(v) for v in data]
+    return data
+
+
+def get_krx_realtime_naver(ticker_code):
+    """네이버 금융에서 실시간 가격 긁어오기 (가입 ❌, 완전 무료 ⭕)"""
+
+    # ✅ 버그1 수정: [0]으로 첫 번째 요소만 꺼내기
+    pure_code = ticker_code.split('.')[0]   # '005930.KS' → '005930'
+
+    url = f"https://finance.naver.com/item/main.naver?code={pure_code}"
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+
+    res = requests.get(url, headers=headers, timeout=10)
+    soup = BeautifulSoup(res.text, 'html.parser')
+
     try:
-        # 1. 야후 파이낸스에서 종목 검색
-        stock = yf.Ticker(ticker)
-        
-        # 2. 최근 5일치 데이터 가져오기 (주말/휴일 고려)
-        hist = stock.history(period="5d")
-        
-        if len(hist) < 2:
-            return {"status": "error", "message": "데이터를 불러올 수 없습니다."}
+        # 1. 현재가 추출
+        today_p = soup.select_one('.no_today .blind')
+        price = float(today_p.text.replace(',', ''))
 
-        # 어제 종가와 오늘 현재가(또는 오늘 종가) 추출
-        yesterday_close = hist['Close'].iloc[-2]
-        current_price = hist['Close'].iloc[-1]
-        
-        # 변동 금액 및 변동률 계산
-        diff = current_price - yesterday_close
-        diff_percent = (diff / yesterday_close) * 100
+        # ✅ 버그2 수정: select()는 리스트 → [0], [1]로 각각 꺼내기
+        exday_spans  = soup.select('.no_exday .blind')
+        diff         = float(exday_spans[0].text.replace(',', ''))
+        diff_percent = float(exday_spans[1].text.replace(',', '').replace('%', ''))
 
-        # 3. 💡 [핵심] 어떤 API를 쓰든 무조건 이 '통일된 모양'으로 반환하도록 약속!
+        # 3. 하락 여부 판별
+        exday_html = str(soup.select_one('.no_exday'))
+        if '하락' in exday_html or 'nv01' in exday_html or 'down' in exday_html:
+            diff         = -abs(diff)
+            diff_percent = -abs(diff_percent)
+
         return {
             "status": "success",
-            "price": round(current_price, 2),        # 현재가
-            "diff": round(diff, 2),                  # 변동 금액 (어제 대비)
-            "diff_percent": round(diff_percent, 2)   # 변동률(%)
+            "price": price,
+            "diff": diff,
+            "diff_percent": round(diff_percent, 2)
         }
+
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        raise Exception(f"네이버 금융 파싱 에러: {str(e)}")
+
+
+class WeatherFeature:
+    @staticmethod
+    def get_weather_briefing(location="서울"):
+        """네이버 날씨를 스크래핑해서 현재 상태와 온도를 가져옵니다."""
+        url = f"https://search.naver.com/search.naver?query={location}+날씨"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        
+        try:
+            res = requests.get(url, headers=headers)
+            soup = BeautifulSoup(res.text, 'html.parser')
+            
+            # 1. 현재 온도 추출
+            temp_tag = soup.select_one('div.temperature_text strong')
+            temp = temp_tag.text.replace('현재 온도', '').strip() if temp_tag else "정보 없음"
+            
+            # 2. 현재 날씨 상태 추출 (맑음, 흐림, 비 등)
+            status_tag = soup.select_one('span.weather.before_slash')
+            status = status_tag.text.strip() if status_tag else "알 수 없음"
+            
+            # 3. 이모지 아이콘 판별
+            icon = "☀️"  # 기본은 맑음(해)
+            if "비" in status or "소나기" in status or "눈" in status:
+                icon = "🌧️"  # 비구름
+            elif "흐림" in status or "구름" in status:
+                icon = "☁️"  # 구름
+                
+            briefing_text = f"현재 {location} 날씨: {status}\n기온: {temp}\n우산 챙기는 거 잊지 마세요!" if icon == "🌧️" else f"현재 {location} 날씨: {status}\n기온: {temp}\n좋은 하루 보내세요!"
+                
+            return icon, briefing_text
+            
+        except Exception as e:
+            return "❓", "날씨 정보를 불러오지 못했어요."
+def get_realtime_stock(ticker: str):
+    """티커를 받아서 한국은 네이버로, 미국/코인은 야후로 분기 처리"""
+    try:
+        # 💡 한국 주식(.KS, .KQ)은 네이버 금융 실시간
+        if ticker.endswith(".KS") or ticker.endswith(".KQ"):
+            return fix_nan(get_krx_realtime_naver(ticker))
+
+        # 💡 미국 주식 / 코인은 yfinance
+        stock = yf.Ticker(ticker)
+        hist  = stock.history(period="7d")   # 7d: 주말·공휴일 연속돼도 안전
+
+        if len(hist) < 2:
+            return fix_nan({"status": "error", "message": "데이터 없음"})
+
+        prev_close = float(hist['Close'].iloc[-2])
+
+        # 실시간 가격 우선, 없으면 마지막 종가로 폴백
+        current_price = None
+        try:
+            current_price = stock.fast_info.last_price
+        except Exception:
+            pass
+        if not current_price or (isinstance(current_price, float) and math.isnan(current_price)):
+            current_price = float(hist['Close'].iloc[-1])
+
+        diff         = current_price - prev_close
+        diff_percent = (diff / prev_close) * 100 if prev_close else 0
+
+        return fix_nan({
+            "status": "success",
+            "price": round(float(current_price), 2),
+            "diff": round(float(diff), 2),
+            "diff_percent": round(float(diff_percent), 2)
+        })
+
+    except Exception as e:
+        return fix_nan({"status": "error", "message": str(e)})

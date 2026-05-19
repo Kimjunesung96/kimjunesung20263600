@@ -11,7 +11,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"], 
+    allow_origins=["http://localhost:5173", "http://localhost:8000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -19,7 +19,6 @@ app.add_middleware(
 
 CONFIG_FILE = "config.json"
 
-# 💡 티커를 직접 받을 수 있게 확장
 class StockItem(BaseModel):
     name: str
     ticker: str = ""
@@ -34,7 +33,7 @@ class ClipboardItem(BaseModel):
 
 def get_db_connection():
     conn = sqlite3.connect('news.db')
-    conn.row_factory = sqlite3.Row 
+    conn.row_factory = sqlite3.Row
     return conn
 
 import pickle
@@ -66,8 +65,8 @@ def _download_and_save():
     _df_krx = fdr.StockListing('KRX')
     print("📡 US 종목 목록 다운로드 중...")
     df_nasdaq = fdr.StockListing('NASDAQ')
-    df_nyse = fdr.StockListing('NYSE')
-    df_amex = fdr.StockListing('AMEX')
+    df_nyse   = fdr.StockListing('NYSE')
+    df_amex   = fdr.StockListing('AMEX')
     _df_us = pd.concat([df_nasdaq, df_nyse, df_amex], ignore_index=True)
     with open(CACHE_FILE, "wb") as f:
         pickle.dump({"krx": _df_krx, "us": _df_us, "saved_at": _dt.datetime.now()}, f)
@@ -91,13 +90,13 @@ def startup_event():
     cursor.execute('CREATE TABLE IF NOT EXISTS schedule (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT NOT NULL, content TEXT NOT NULL)')
     cursor.execute('CREATE TABLE IF NOT EXISTS clipboard (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, content TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)')
     cursor.execute('CREATE TABLE IF NOT EXISTS favorite_stocks (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, ticker TEXT NOT NULL UNIQUE)')
-    
+
     cursor.execute("SELECT COUNT(*) FROM favorite_stocks")
     if cursor.fetchone()[0] == 0:
         cursor.execute("INSERT INTO favorite_stocks (name, ticker) VALUES ('애플', 'AAPL')")
         cursor.execute("INSERT INTO favorite_stocks (name, ticker) VALUES ('테슬라', 'TSLA')")
         cursor.execute("INSERT INTO favorite_stocks (name, ticker) VALUES ('삼성전자', '005930.KS')")
-    
+
     conn.commit()
     conn.close()
 
@@ -130,15 +129,18 @@ def delete_schedule(id: int):
 
 @app.get("/api/settings")
 def get_settings_api():
-    if not os.path.exists(CONFIG_FILE): return {"alarm_interval": 10, "enabled_categories": ["01", "02", "03", "04", "05", "06", "07", "08"], "bubble_duration": 5, "news_count": 10}
-    with open(CONFIG_FILE, "r") as f: return json.load(f)
+    if not os.path.exists(CONFIG_FILE):
+        return {"alarm_interval": 10, "enabled_categories": ["01","02","03","04","05","06","07","08"], "bubble_duration": 5, "news_count": 10}
+    with open(CONFIG_FILE, "r") as f:
+        return json.load(f)
 
 @app.post("/api/settings")
 async def update_settings(request: Request):
     data = await request.json()
     current_settings = get_settings_api()
     current_settings.update(data)
-    with open(CONFIG_FILE, "w") as f: json.dump(current_settings, f)
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(current_settings, f)
     return {"status": "success"}
 
 @app.get("/api/news/{category_code}")
@@ -146,21 +148,38 @@ def get_news(category_code: str):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT id, category_code, title, url, ai_summary, created_at FROM news WHERE category_code = ? ORDER BY created_at DESC LIMIT 10", (category_code,))
+        cursor.execute(
+            "SELECT id, category_code, title, url, ai_summary, created_at FROM news "
+            "WHERE category_code = ? ORDER BY created_at DESC LIMIT 10",
+            (category_code,)
+        )
         return {"status": "success", "data": [dict(row) for row in cursor.fetchall()]}
-    except Exception as e: return {"status": "error", "message": str(e)}
-    finally: conn.close()
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        conn.close()
 
+# ✅ /api/search 통합 — q= (웹) 또는 keyword= (트레이앱) 둘 다 지원
 @app.get("/api/search")
-def search_news(keyword: str):
+def search_news(q: str = "", keyword: str = ""):
+    # q= 파라미터 우선, 없으면 keyword= 사용
+    search_term = q or keyword
+    if not search_term:
+        return {"status": "error", "message": "검색어를 입력하세요"}
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        search_term = f"%{keyword}%"
-        cursor.execute("SELECT id, category_code, title, url, ai_summary, created_at FROM news WHERE title LIKE ? OR ai_summary LIKE ? ORDER BY created_at DESC LIMIT 20", (search_term, search_term))
+        term = f"%{search_term}%"
+        cursor.execute(
+            "SELECT id, category_code, title, url, ai_summary, created_at FROM news "
+            "WHERE title LIKE ? OR ai_summary LIKE ? ORDER BY created_at DESC LIMIT 50",
+            (term, term)
+        )
         return {"status": "success", "data": [dict(row) for row in cursor.fetchall()]}
-    except Exception as e: return {"status": "error", "message": str(e)}
-    finally: conn.close()
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        conn.close()
 
 @app.get("/api/clipboard")
 def get_clipboard():
@@ -200,8 +219,10 @@ def get_favorite_stocks():
     try:
         cursor.execute("SELECT id, name, ticker FROM favorite_stocks ORDER BY id ASC")
         return {"status": "success", "data": [dict(r) for r in cursor.fetchall()]}
-    except: return {"status": "success", "data": []}
-    finally: conn.close()
+    except:
+        return {"status": "success", "data": []}
+    finally:
+        conn.close()
 
 KR_TO_EN = {
     "아마존": "Amazon", "애플": "Apple", "테슬라": "Tesla",
@@ -216,7 +237,6 @@ def search_stock(name: str):
     try:
         results = []
         df_krx = get_krx()
-        # 💡 regex=False: 괄호나 특수문자가 들어가도 안 터지게 방어!
         krx_matches = df_krx[df_krx['Name'].str.contains(name, case=False, na=False, regex=False)].head(5)
         for _, row in krx_matches.iterrows():
             ticker = f"{row['Code']}.KS" if row['Market'] == 'KOSPI' else f"{row['Code']}.KQ"
@@ -236,7 +256,6 @@ def search_stock(name: str):
 def add_favorite_stock(item: StockItem):
     try:
         ticker = item.ticker
-        # 만약 드롭다운에서 클릭하지 않고 직접 검색 후 엔터를 쳤다면 백업으로 다시 찾기
         if not ticker:
             df_krx = get_krx()
             krx_match = df_krx[df_krx['Name'] == item.name]
@@ -247,7 +266,8 @@ def add_favorite_stock(item: StockItem):
                 en_name = KR_TO_EN.get(item.name, item.name)
                 df_us = get_us()
                 us_match = df_us[df_us['Name'].str.contains(en_name, case=False, na=False, regex=False)]
-                if not us_match.empty: ticker = us_match.iloc[0]['Symbol']
+                if not us_match.empty:
+                    ticker = us_match.iloc[0]['Symbol']
                 else:
                     if "비트" in item.name or "bitcoin" in item.name.lower(): ticker = "BTC-USD"
                     elif "이더" in item.name or "ethereum" in item.name.lower(): ticker = "ETH-USD"
@@ -258,11 +278,10 @@ def add_favorite_stock(item: StockItem):
         cursor.execute("INSERT INTO favorite_stocks (name, ticker) VALUES (?, ?)", (item.name, ticker))
         conn.commit()
         return {"status": "success"}
-    
-    # 💡 [핵심] 이미 등록된 경우 똑똑하게 에러 메시지 뱉기
+
     except sqlite3.IntegrityError:
         return {"status": "error", "message": f"[{item.name}] 이미 등록된 관심종목입니다!"}
-    except Exception as e: 
+    except Exception as e:
         return {"status": "error", "message": f"오류가 발생했습니다: {e}"}
     finally:
         if 'conn' in locals(): conn.close()
@@ -275,6 +294,7 @@ def delete_favorite_stock(id: int):
     conn.commit()
     conn.close()
     return {"status": "success"}
+
 
 from fastapi.staticfiles import StaticFiles
 app.mount("/", StaticFiles(directory="news-app/dist", html=True), name="static")

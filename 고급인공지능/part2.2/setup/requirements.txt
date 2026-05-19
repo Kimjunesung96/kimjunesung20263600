@@ -1,0 +1,27 @@
+# ── 웹 서버 ──────────────────────────────
+fastapi
+uvicorn[standard]
+pydantic
+python-multipart
+
+# ── 데이터 수집 / 파싱 ────────────────────
+requests
+beautifulsoup4
+lxml
+html5lib
+
+# ── 주식 데이터 ───────────────────────────
+finance-datareader
+yfinance
+pandas
+openpyxl
+
+# ── 스케줄러 ─────────────────────────────
+schedule
+
+# ── GUI (트레이 봇) ───────────────────────
+pillow
+
+# ── 스크린샷 / 클립보드 (Windows 전용) ───
+mss
+pywin32

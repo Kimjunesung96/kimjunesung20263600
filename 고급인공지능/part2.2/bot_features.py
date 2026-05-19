@@ -2,8 +2,12 @@ import tkinter as tk
 import datetime
 import sqlite3
 import os
+import threading
 from tkinter import simpledialog
 import tkinter.messagebox as messagebox
+
+# 💡 주식 자동 갱신 주기 (초) — 여기서 바꾸세요!
+STOCK_REFRESH_SECONDS = 30
 
 class AssistantFeatures:
     def __init__(self, root, face_label, show_bubble_func):
@@ -11,24 +15,54 @@ class AssistantFeatures:
         self.face_label = face_label
         self.show_bubble = show_bubble_func
         
-        # 타이머 및 알람 상태
         self.timer_seconds = 0
         self.is_timer_running = False
         self.target_alarm_time = ""
         
-        # 윈도우 창 변수들
         self.todo_win = None
         self.folder_win = None
         self.stock_win = None
         
-        # 스샷용 변수
+        self._stock_refresh_id = None
         self.overlay = None
         self.start_x = 0
         self.start_y = 0
         self.rect = None
 
+        # ---------------------------------------------------------
+        # ⛅ 날씨 아이콘 세팅
+        # ---------------------------------------------------------
+        self.weather_label = tk.Label(
+            self.root, 
+            text="⛅", 
+            font=("Segoe UI Emoji", 14), 
+            bg="magenta", 
+            fg="black",
+            cursor="hand2"
+        )
+        self.face_label.pack_forget()
+        self.weather_label.pack(side="top", pady=(0, 0))
+        self.face_label.pack(side="bottom")
+        
+        self.weather_label.bind("<Button-1>", self.on_weather_click)
+        self.current_weather_briefing = "날씨 정보를 불러오는 중입니다..."
+        self.update_weather()
+
+
+    def on_weather_click(self, event):
+        display_time_ms = 20000 
+        self.show_bubble(self.current_weather_briefing, "WEATHER", display_time_ms, True)    
+    
+    def update_weather(self):
+        def fetch():
+            icon, briefing = WeatherFeature.get_weather_briefing("서울")
+            self.current_weather_briefing = briefing
+            self.root.after(0, lambda: self.weather_label.config(text=icon))
+            self.root.after(1800000, self.update_weather)
+        threading.Thread(target=fetch, daemon=True).start()
+
     # ---------------------------------------------------------
-    # ⏳ 타이머
+    # ⏳ 타이머 및 알람
     # ---------------------------------------------------------
     def start_timer(self, minutes):
         self.timer_seconds = minutes * 60
@@ -50,9 +84,6 @@ class AssistantFeatures:
             self.face_label.config(text="🚨", font=("Arial", 45))
             self.show_giant_alert("⏳ 타이머 종료!", "지정하신 타이머 시간이 다 되었습니다!")
 
-    # ---------------------------------------------------------
-    # ⏰ 알람 기능
-    # ---------------------------------------------------------
     def set_alarm(self):
         time_str = simpledialog.askstring("알람 설정", "알람 시간을 입력하세요\n(예: 08:30, 14:00)")
         if time_str:
@@ -64,7 +95,7 @@ class AssistantFeatures:
             now_str = datetime.datetime.now().strftime("%H:%M")
             if now_str == self.target_alarm_time:
                 self.show_bubble("⏰ 띠링! 설정하신 알람 시간입니다!\n좋은 하루 보내세요!", "ALARM", 10000, False)
-                self.target_alarm_time = "" 
+                self.target_alarm_time = ""
 
     def show_giant_alert(self, title, message):
         alert_win = tk.Toplevel(self.root)
@@ -73,8 +104,8 @@ class AssistantFeatures:
         sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
         alert_win.geometry(f"{sw}x{sh}+0+0")
         alert_win.configure(bg="black")
-        alert_win.attributes("-alpha", 0.85) 
-        
+        alert_win.attributes("-alpha", 0.85)
+
         def click_to_reset(event):
             alert_win.destroy()
             self.face_label.config(text="🤖", font=("Arial", 45))
@@ -87,7 +118,7 @@ class AssistantFeatures:
         tk.Label(frame, text="(🚨 한번 클릭하면 원상태로 복귀합니다)", font=("맑은 고딕", 12, "bold"), bg="#ffeb3b", fg="#5f6368").pack()
 
     # ---------------------------------------------------------
-    # 📅 할 일 타워 기능 
+    # 📅 할 일 타워 기능 (다크모드 패널 적용)
     # ---------------------------------------------------------
     def get_today_schedules(self):
         try:
@@ -99,7 +130,8 @@ class AssistantFeatures:
             rows = [dict(row) for row in cursor.fetchall()]
             conn.close()
             return rows
-        except Exception: return []
+        except Exception:
+            return []
 
     def toggle_todo_bubbles(self):
         if self.todo_win and self.todo_win.winfo_exists():
@@ -109,7 +141,8 @@ class AssistantFeatures:
             self.draw_todo_bubbles()
 
     def draw_todo_bubbles(self):
-        if self.todo_win and self.todo_win.winfo_exists(): self.todo_win.destroy()
+        if self.todo_win and self.todo_win.winfo_exists():
+            self.todo_win.destroy()
         items = self.get_today_schedules()
         if not items:
             self.show_bubble("오늘 등록된 일정이 없습니다! ☕", "ALARM", 3000, True)
@@ -118,16 +151,20 @@ class AssistantFeatures:
         self.todo_win = tk.Toplevel(self.root)
         self.todo_win.overrideredirect(True)
         self.todo_win.attributes("-topmost", True)
-        self.todo_win.configure(bg='magenta')
-        self.todo_win.attributes("-transparentcolor", "magenta")
+        self.todo_win.configure(bg='#202124')
+
+        container = tk.Frame(self.todo_win, bg='#202124', padx=15, pady=15, relief="ridge", bd=2)
+        container.pack()
+
+        tk.Label(container, text="📅 오늘 할 일", bg='#202124', fg="white", font=("맑은 고딕", 10, "bold")).pack(side="top", pady=(0, 10))
 
         def mark_done(event, lbl):
             if lbl.cget("bg") != "#1a73e8":
                 lbl.config(bg="#1a73e8", fg="white", text=lbl.cget("text") + " (✔완료)")
 
         for item in reversed(items):
-            lbl = tk.Label(self.todo_win, text=f"📌 {item['content']}", bg="#4caf50", fg="white", font=("맑은 고딕", 10, "bold"), relief="solid", bd=2, padx=12, pady=6, cursor="hand2")
-            lbl.pack(side="bottom", pady=2)
+            lbl = tk.Label(container, text=f"📌 {item['content']}", bg="#3c4043", fg="white", font=("맑은 고딕", 10), relief="flat", padx=12, pady=6, cursor="hand2", anchor="w")
+            lbl.pack(side="bottom", pady=2, fill="x")
             lbl.bind("<Button-1>", lambda e, l=lbl: mark_done(e, l))
 
         self.todo_win.update_idletasks()
@@ -142,15 +179,28 @@ class AssistantFeatures:
             self.todo_win.geometry(f"+{tx}+{ty}")
 
     # ---------------------------------------------------------
-    # 📸 스크린샷 & 클립보드 복사 기능
+    # 📸 스크린샷 & 클립보드 복사
     # ---------------------------------------------------------
+    def _get_dpi_scale(self):
+        try:
+            import ctypes
+            hwnd = self.root.winfo_id()
+            dpi = ctypes.windll.user32.GetDpiForWindow(hwnd)
+            return dpi / 96.0
+        except Exception:
+            return 1.0
+
     def start_screenshot(self):
         self.overlay = tk.Toplevel(self.root)
         self.overlay.attributes("-topmost", True)
         self.overlay.attributes("-alpha", 0.3)
         self.overlay.configure(bg="black")
+        
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        self.overlay.geometry(f"{sw}x{sh}+0+0")
         self.overlay.attributes("-fullscreen", True)
-        self.overlay.config(cursor="cross") 
+        self.overlay.config(cursor="cross")
 
         self.canvas = tk.Canvas(self.overlay, bg="black", highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
@@ -165,67 +215,80 @@ class AssistantFeatures:
         self.overlay.bind("<Escape>", lambda e: self.overlay.destroy())
 
     def on_screen_press(self, event):
-        self.start_x = event.x
-        self.start_y = event.y
-        self.rect = self.canvas.create_rectangle(self.start_x, self.start_y, self.start_x, self.start_y, outline="red", width=2, fill="white")
+        self.start_x = event.x_root
+        self.start_y = event.y_root
+        self.rect = self.canvas.create_rectangle(event.x, event.y, event.x, event.y, outline="red", width=2, fill="")
 
     def on_screen_drag(self, event):
-        self.canvas.coords(self.rect, self.start_x, self.start_y, event.x, event.y)
+        self.canvas.coords(self.rect, self.start_x - self.overlay.winfo_rootx(), self.start_y - self.overlay.winfo_rooty(), event.x, event.y)
 
     def on_screen_release(self, event):
-        end_x, end_y = event.x, event.y
-        self.overlay.destroy() 
+        end_x = event.x_root
+        end_y = event.y_root
+        self.overlay.destroy()
+        
         if abs(end_x - self.start_x) < 10 or abs(end_y - self.start_y) < 10:
             self.show_bubble("영역이 너무 작아 캡처가 취소되었습니다.", "ALARM", 2000, True)
             return
+            
         self.root.after(200, lambda: self._capture_and_copy(self.start_x, self.start_y, end_x, end_y))
 
     def _capture_and_copy(self, x1, y1, x2, y2):
         try:
-            from PIL import ImageGrab
+            import mss 
+            from PIL import Image
             import win32clipboard
             from io import BytesIO
-            import requests 
-            import base64   
+            import requests
+            import base64
         except ImportError:
-            self.show_bubble("📸 [오류]\n터미널에서 부품을 마저 설치해주세요!\npip install requests", "ALARM", 5000, True)
+            self.show_bubble("📸 [오류]\n터미널에서 mss, pillow를 설치해주세요!", "ALARM", 5000, True)
             return
 
-        bbox = (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
-        img = ImageGrab.grab(bbox)
+        left = min(x1, x2)
+        top = min(y1, y2)
+        width = abs(x2 - x1)
+        height = abs(y2 - y1)
         
+        monitor = {"top": top, "left": left, "width": width, "height": height}
+
+        with mss.mss() as sct:
+            sct_img = sct.grab(monitor)
+            img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
+
+        import datetime, os
         save_dir = "screenshots"
-        if not os.path.exists(save_dir): os.makedirs(save_dir)
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
         filename = f"capture_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
         filepath = os.path.join(save_dir, filename)
         img.save(filepath, "PNG")
 
         output = BytesIO()
         img.convert("RGB").save(output, "BMP")
-        data = output.getvalue()[14:] 
+        data = output.getvalue()[14:]
         output.close()
-        
+
         win32clipboard.OpenClipboard()
         win32clipboard.EmptyClipboard()
         win32clipboard.SetClipboardData(win32clipboard.CF_DIB, data)
         win32clipboard.CloseClipboard()
-        
+
         try:
             img_buffer = BytesIO()
             img.save(img_buffer, format="PNG")
             img_base64 = base64.b64encode(img_buffer.getvalue()).decode("utf-8")
             base64_str = f"data:image/png;base64,{img_base64}"
-            
             response = requests.post("http://localhost:8000/api/clipboard", json={"type": "image", "content": base64_str})
             if response.status_code == 200:
-                self.show_bubble(f"📸 찰칵!\n클립보드, 파일, 서버에 모두 저장됨!", "ALARM", 4000, True)
+                self.show_bubble("📸 찰칵!\n클립보드, 파일, 서버에 모두 저장됨!", "ALARM", 4000, True)
             else:
                 self.show_bubble(f"📸 찰칵!\nDB 저장 실패: {response.status_code}", "ALARM", 4000, True)
-        except Exception as e:
-            self.show_bubble(f"📸 찰칵!\n서버가 꺼져있거나 오류가 났습니다.", "ALARM", 4000, True)
+        except Exception:
+            self.show_bubble("📸 찰칵!\n서버가 꺼져있거나 오류가 났습니다.", "ALARM", 4000, True)
 
     # ---------------------------------------------------------
-    # 🚀 퀵 폴더 기능 (수동 등록)
+    # 🚀 퀵 폴더 기능 (다크모드 패널 적용)
     # ---------------------------------------------------------
     def get_quick_folders(self):
         try:
@@ -239,7 +302,8 @@ class AssistantFeatures:
             rows = [dict(row) for row in cursor.fetchall()]
             conn.close()
             return rows
-        except Exception: return []
+        except Exception:
+            return []
 
     def toggle_folder_bubbles(self):
         if self.folder_win and self.folder_win.winfo_exists():
@@ -249,21 +313,26 @@ class AssistantFeatures:
             self.draw_folder_bubbles()
 
     def draw_folder_bubbles(self):
-        if hasattr(self, 'folder_win') and self.folder_win and self.folder_win.winfo_exists(): 
+        if hasattr(self, 'folder_win') and self.folder_win and self.folder_win.winfo_exists():
             self.folder_win.destroy()
 
         self.folder_win = tk.Toplevel(self.root)
         self.folder_win.overrideredirect(True)
         self.folder_win.attributes("-topmost", True)
-        self.folder_win.configure(bg='magenta')
-        self.folder_win.attributes("-transparentcolor", "magenta")
+        self.folder_win.configure(bg='#202124')
+
+        container = tk.Frame(self.folder_win, bg='#202124', padx=15, pady=15, relief="ridge", bd=2)
+        container.pack()
+
+        tk.Label(container, text="📁 퀵 폴더", bg='#202124', fg="white", font=("맑은 고딕", 10, "bold")).pack(side="top", pady=(0, 10))
 
         items = self.get_quick_folders()
 
         def open_folder(path):
-            import os
-            try: os.startfile(path)
-            except: self.show_bubble("❌ 경로를 열 수 없습니다.\n경로가 올바른지 확인해주세요.", "ALARM", 3000, True)
+            try:
+                os.startfile(path)
+            except Exception:
+                self.show_bubble("❌ 경로를 열 수 없습니다.\n경로가 올바른지 확인해주세요.", "ALARM", 3000, True)
 
         def delete_folder(e, id):
             if messagebox.askyesno("삭제", "이 폴더를 즐겨찾기에서 지우시겠습니까?"):
@@ -279,7 +348,6 @@ class AssistantFeatures:
             if not name: return
             path = simpledialog.askstring("퀵 폴더 등록", "복사한 폴더 경로를 붙여넣으세요\n(예: C:\\Users\\... )")
             if not path: return
-            
             try:
                 conn = sqlite3.connect('news.db')
                 cursor = conn.cursor()
@@ -287,22 +355,22 @@ class AssistantFeatures:
                 conn.commit()
                 conn.close()
                 self.draw_folder_bubbles()
-            except: pass
+            except Exception: pass
 
-        add_btn = tk.Label(self.folder_win, text="➕ 새 폴더 등록하기", bg="#fbbc05", fg="black", font=("맑은 고딕", 9, "bold"), relief="solid", bd=2, padx=15, pady=6, cursor="hand2")
-        add_btn.pack(side="bottom", pady=4)
+        add_btn = tk.Label(container, text="➕ 새 폴더 등록", bg="#fbbc05", fg="black", font=("맑은 고딕", 9, "bold"), relief="flat", padx=15, pady=6, cursor="hand2")
+        add_btn.pack(side="bottom", pady=(10, 0), fill="x")
         add_btn.bind("<Button-1>", lambda e: add_new_folder())
 
         for item in reversed(items):
-            frame = tk.Frame(self.folder_win, bg='magenta')
-            frame.pack(side="bottom", pady=2)
-            
-            lbl = tk.Label(frame, text=f"📁 {item['name']}", bg="#8ab4f8", fg="black", font=("맑은 고딕", 10, "bold"), relief="solid", bd=2, padx=12, pady=6, cursor="hand2")
-            lbl.pack(side="left")
+            frame = tk.Frame(container, bg='#202124')
+            frame.pack(side="bottom", pady=2, fill="x")
+
+            lbl = tk.Label(frame, text=f" {item['name']}", bg="#3c4043", fg="white", font=("맑은 고딕", 10), relief="flat", padx=12, pady=6, cursor="hand2", anchor="w")
+            lbl.pack(side="left", fill="x", expand=True)
             lbl.bind("<Button-1>", lambda e, p=item['path']: open_folder(p))
-            
-            del_btn = tk.Label(frame, text="✖", bg="#ea4335", fg="white", font=("Arial", 8, "bold"), relief="solid", bd=1, padx=4, pady=4, cursor="hand2")
-            del_btn.pack(side="left", padx=(2,0))
+
+            del_btn = tk.Label(frame, text="✖", bg="#ea4335", fg="white", font=("Arial", 8, "bold"), relief="flat", padx=8, pady=6, cursor="hand2")
+            del_btn.pack(side="right", padx=(2, 0))
             del_btn.bind("<Button-1>", lambda e, i=item['id']: delete_folder(e, i))
 
         self.folder_win.update_idletasks()
@@ -317,11 +385,9 @@ class AssistantFeatures:
             self.folder_win.geometry(f"+{tx}+{ty}")
 
     # ---------------------------------------------------------
-    # 📈 주식 전광판 타워 기능
+    # 📈 주식 전광판 타워 기능 (다크모드 패널 적용)
     # ---------------------------------------------------------
-
     def get_favorite_stocks_from_db(self):
-        """💡 하드코딩 제거 - DB에서 실제 등록된 종목만 가져오기"""
         try:
             conn = sqlite3.connect('news.db')
             conn.row_factory = sqlite3.Row
@@ -334,87 +400,112 @@ class AssistantFeatures:
             return []
 
     def toggle_stock_bubbles(self):
-        if not hasattr(self, 'stock_win'): self.stock_win = None
+        if not hasattr(self, 'stock_win'):
+            self.stock_win = None
 
         if self.stock_win and self.stock_win.winfo_exists():
+            if self._stock_refresh_id:
+                self.root.after_cancel(self._stock_refresh_id)
+                self._stock_refresh_id = None
             self.stock_win.destroy()
             self.stock_win = None
         else:
             self.draw_stock_bubbles()
 
     def draw_stock_bubbles(self):
-        if hasattr(self, 'stock_win') and self.stock_win and self.stock_win.winfo_exists(): 
+        if hasattr(self, 'stock_win') and self.stock_win and self.stock_win.winfo_exists():
             self.stock_win.destroy()
 
         self.stock_win = tk.Toplevel(self.root)
         self.stock_win.overrideredirect(True)
         self.stock_win.attributes("-topmost", True)
-        self.stock_win.configure(bg='magenta')
-        self.stock_win.attributes("-transparentcolor", "magenta")
+        self.stock_win.configure(bg='#202124')
 
-        loading_lbl = tk.Label(self.stock_win, text="📡 주식/코인 데이터 불러오는 중...", bg="#f1f3f4", fg="#5f6368", font=("맑은 고딕", 9, "bold"), relief="solid", bd=1, padx=10, pady=5)
-        loading_lbl.pack(side="bottom", pady=2)
-        
+        container = tk.Frame(self.stock_win, bg='#202124', padx=15, pady=15, relief="ridge", bd=2)
+        container.pack()
+
+        tk.Label(container, text="📈 관심 주식", bg='#202124', fg="white", font=("맑은 고딕", 10, "bold")).pack(side="top", pady=(0, 10))
+
+        loading_lbl = tk.Label(
+            container, text="📡 불러오는 중...",
+            bg="#3c4043", fg="white", font=("맑은 고딕", 9),
+            relief="flat", padx=10, pady=5
+        )
+        loading_lbl.pack(side="bottom", pady=2, fill="x")
+
         self.stock_win.update_idletasks()
         self.update_stock_position()
 
         def fetch_stocks():
             import requests
-            
-            # ✅ 핵심 수정: 하드코딩 제거, DB에서 가져오기
             stocks = self.get_favorite_stocks_from_db()
-            
+
             if not stocks:
-                self.root.after(0, lambda: render_empty())
+                self.root.after(0, render_empty)
                 return
 
             results = []
             for stock in stocks:
                 try:
-                    res = requests.get(f"http://localhost:8000/api/stock/{stock['ticker']}").json()
+                    res = requests.get(f"http://localhost:8000/api/stock/{stock['ticker']}", timeout=10).json()
                     results.append({"name": stock["name"], "data": res})
-                except:
+                except Exception:
                     results.append({"name": stock["name"], "data": {"status": "error"}})
-            
+
             self.root.after(0, lambda: render_stocks(results))
 
         def render_empty():
+            if not self.stock_win or not self.stock_win.winfo_exists(): return
             loading_lbl.destroy()
-            lbl = tk.Label(self.stock_win, text="📈 등록된 종목이 없습니다", bg="#f1f3f4", fg="#5f6368", font=("맑은 고딕", 10, "bold"), relief="solid", bd=2, padx=12, pady=6)
-            lbl.pack(side="bottom", pady=2)
+            tk.Label(
+                container, text="등록된 종목이 없습니다",
+                bg="#3c4043", fg="#b0b0b0", font=("맑은 고딕", 10),
+                relief="flat", padx=12, pady=6
+            ).pack(side="bottom", pady=2, fill="x")
             self.stock_win.update_idletasks()
             self.update_stock_position()
 
         def render_stocks(results):
-            loading_lbl.destroy() 
-            
+            if not self.stock_win or not self.stock_win.winfo_exists(): return
+            loading_lbl.destroy()
+
             for item in reversed(results):
                 name = item["name"]
                 data = item["data"]
-                
+
                 if data.get("status") == "success":
                     price = data["price"]
-                    diff = data["diff"]
-                    pct = data["diff_percent"]
-                    
+                    diff  = data["diff"]
+                    pct   = data["diff_percent"]
+
                     if diff > 0:
                         bg_color, fg_color, arrow = "#fce8e6", "#d93025", "🔺"
                     elif diff < 0:
                         bg_color, fg_color, arrow = "#e8f0fe", "#1a73e8", "🔻"
                     else:
-                        bg_color, fg_color, arrow = "white", "black", "➖"
-                        
+                        bg_color, fg_color, arrow = "#f1f3f4", "black", "➖"
+
                     text = f"{name} : {price:,.2f} ({arrow} {abs(pct)}%)"
                 else:
-                    bg_color, fg_color, text = "#f1f3f4", "#5f6368", f"{name} : 정보 없음"
+                    bg_color, fg_color, text = "#3c4043", "#b0b0b0", f"{name} : 정보 없음"
 
-                lbl = tk.Label(self.stock_win, text=text, bg=bg_color, fg=fg_color, font=("맑은 고딕", 10, "bold"), relief="solid", bd=2, padx=12, pady=6)
-                lbl.pack(side="bottom", pady=2)
-            
+                # 💡 [핵심] Label을 변수에 먼저 담고, 그 다음에 pack()을 해야 클릭(bind)이 먹힙니다!
+                lbl = tk.Label(
+                    container, text=text,
+                    bg=bg_color, fg=fg_color,
+                    font=("맑은 고딕", 10, "bold"),
+                    relief="flat", padx=12, pady=6, anchor="w",
+                    cursor="hand2"
+                )
+                lbl.pack(side="bottom", pady=2, fill="x")
+                lbl.bind("<Button-1>", lambda e, n=name: self.on_stock_click(n))
+
             self.stock_win.update_idletasks()
             self.update_stock_position()
 
-        import threading
+            if self.stock_win and self.stock_win.winfo_exists():
+                self._stock_refresh_id = self.root.after(STOCK_REFRESH_SECONDS * 1000, self.draw_stock_bubbles)
+
         threading.Thread(target=fetch_stocks, daemon=True).start()
 
     def update_stock_position(self):
@@ -424,3 +515,130 @@ class AssistantFeatures:
             tx = rx + (rw // 2) - (tw // 2)
             ty = ry - th - 5
             self.stock_win.geometry(f"+{tx}+{ty}")
+
+    # ---------------------------------------------------------
+    # 💡 [신규] 주식 전광판 클릭 시 관련 뉴스 릴레이 브리핑!
+    # ---------------------------------------------------------
+    def on_stock_click(self, stock_name):
+        try:
+            conn = sqlite3.connect('news.db')
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            # 주식 이름이 제목이나 요약에 들어간 최신 뉴스 3개 긁어오기!
+            query = "SELECT title, url FROM news WHERE title LIKE ? OR ai_summary LIKE ? ORDER BY created_at DESC LIMIT 3"
+            cursor.execute(query, (f"%{stock_name}%", f"%{stock_name}%"))
+            news_items = [dict(row) for row in cursor.fetchall()]
+            conn.close()
+            
+            if news_items:
+                # 뉴스가 있으면 릴레이 브리핑 시작!
+                self._play_stock_news(news_items, 0, stock_name)
+            else:
+                self.show_bubble(f"'{stock_name}' 관련 최근 뉴스가 없습니다 ㅠㅠ", "ALARM", 3000, True)
+        except Exception as e:
+            pass
+
+# ---------------------------------------------------------
+    # 💡 [수정] 주식 전광판 클릭 시 리액트 웹으로 검색어 쏴버리기!
+    # ---------------------------------------------------------
+    def on_stock_click(self, stock_name):
+        # 💡 안전하게 맨 위에서 도구 상자(모듈)를 불러옵니다!
+        import urllib.parse
+        import webbrowser
+        
+        # 주식 이름(예: 삼성전자)을 인터넷 주소용으로 변환
+        safe_name = urllib.parse.quote(stock_name)
+        
+        # 🚨 [포트 번호 설정] 
+        # 리액트 화면이 5173이면 5173, 만약 선생님 환경에서 8000으로 리액트가 뜬다면 8000으로 바꿔주세요!
+        PORT = 5173 
+        
+        target_url = f"http://localhost:{PORT}/?search={safe_name}"
+        
+        # 브라우저 강제 호출!
+        webbrowser.open(target_url)
+    # (주의: 기존에 있던 _play_stock_news 함수는 이제 안 쓰니까 싹 지워주시면 됩니다!)
+
+# =========================================================
+# ⛅ Open-Meteo 무료 기상 API (가입/API키 불필요)
+# =========================================================
+class WeatherFeature:
+    WMO_MAP = {
+        0:  ("☀️",  "맑음"),
+        1:  ("🌤️", "대체로 맑음"),
+        2:  ("⛅",  "부분 흐림"),
+        3:  ("☁️",  "흐림"),
+        45: ("🌫️", "안개"),
+        48: ("🌫️", "안개"),
+        51: ("🌦️", "가벼운 이슬비"),
+        53: ("🌦️", "이슬비"),
+        55: ("🌧️", "강한 이슬비"),
+        61: ("🌧️", "약한 비"),
+        63: ("🌧️", "비"),
+        65: ("🌧️", "강한 비"),
+        71: ("🌨️", "약한 눈"),
+        73: ("🌨️", "눈"),
+        75: ("🌨️", "강한 눈"),
+        80: ("🌦️", "소나기"),
+        81: ("🌧️", "강한 소나기"),
+        95: ("⛈️",  "뇌우"),
+        99: ("⛈️",  "강한 뇌우"),
+    }
+
+    @staticmethod
+    def get_weather_briefing(location="서울"):
+        import requests
+
+        url = (
+            "https://api.open-meteo.com/v1/forecast"
+            "?latitude=37.5665&longitude=126.9780"
+            "&current=temperature_2m,weathercode,precipitation_probability"
+            "&hourly=temperature_2m,weathercode,precipitation_probability"
+            "&timezone=Asia%2FSeoul&forecast_days=1"
+        )
+
+        try:
+            res = requests.get(url, timeout=10)
+            data = res.json()
+
+            cur = data["current"]
+            cur_temp   = round(cur["temperature_2m"])
+            cur_code   = cur["weathercode"]
+            cur_rain   = cur["precipitation_probability"]
+            icon, status = WeatherFeature.WMO_MAP.get(cur_code, ("⛅", "알 수 없음"))
+
+            from datetime import datetime
+            now_hour = datetime.now().hour
+            hours    = data["hourly"]["time"]
+            temps    = data["hourly"]["temperature_2m"]
+            codes    = data["hourly"]["weathercode"]
+            rains    = data["hourly"]["precipitation_probability"]
+
+            briefing_text = f"🌡 현재 {location}: {status} {cur_temp}°C (강수 {cur_rain}%)\n\n"
+            will_rain = cur_rain >= 40 or "비" in status or "눈" in status or "소나기" in status
+
+            count = 0
+            for i, t in enumerate(hours):
+                h = int(t[11:13])
+                if h <= now_hour: continue
+                
+                wicon, wstatus = WeatherFeature.WMO_MAP.get(codes[i], ("⛅", "?"))
+                briefing_text += f"▪ {h}시: {round(temps[i])}°C {wicon} {wstatus} (강수 {rains[i]}%)\n"
+                
+                if rains[i] >= 40 or "비" in wstatus or "눈" in wstatus:
+                    will_rain = True
+                
+                count += 1
+                if count >= 6: break
+
+            if will_rain:
+                icon = "☔"
+                briefing_text += "\n💡 비/눈 올 가능성 있어요! 우산 챙기세요!"
+            else:
+                briefing_text += "\n💡 오늘 비 소식 없음! 좋은 하루 보내세요!"
+
+            return icon, briefing_text
+
+        except Exception as e:
+            return "❓", f"날씨 정보를 불러오지 못했어요.\n({e})"
