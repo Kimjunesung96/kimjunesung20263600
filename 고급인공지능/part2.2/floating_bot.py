@@ -276,6 +276,10 @@ def open_toolbar_menu():
         tk.Button(bar_frame, text="📸 캡처", command=lambda: [open_and_close("", "toolbar"), bot.start_screenshot()], **btn_style).pack(side="left", padx=3)
         tk.Button(bar_frame, text="📁 폴더", command=bot.toggle_folder_bubbles, **btn_style).pack(side="left", padx=3)
         tk.Button(bar_frame, text="📈 주식", command=bot.toggle_stock_bubbles, **btn_style).pack(side="left", padx=3)
+        
+        # 💡 [신규] 가이드 버튼을 주식 버튼 바로 옆에 추가!
+        tk.Button(bar_frame, text="🧭 가이드", command=lambda: [open_and_close("", "toolbar"), bot.start_guide_mode()], **btn_style).pack(side="left", padx=3)
+        
         tk.Button(bar_frame, text="✖ 닫기", command=lambda: toggle_all_menus(None), bg="#ea4335", fg="white", font=("맑은 고딕", 9, "bold"), relief="flat", cursor="hand2", padx=8, pady=5).pack(side="left", padx=(10,3))
         
         update_toolbar_position()
@@ -383,9 +387,14 @@ face_label.pack(side="bottom")
 
 bot = AssistantFeatures(root, face_label, show_bubble)
 
+# 💡 [신규] 우클릭을 눌렀을 때 나타날 팝업 메뉴 만들기
+
+
 face_label.bind("<ButtonPress-1>", on_press)
 face_label.bind("<B1-Motion>", on_drag)
 face_label.bind("<ButtonRelease-1>", toggle_all_menus)
+# 💡 [신규] 로봇에 우클릭(<Button-3>) 감지 센서 달아주기
+
 
 threading.Thread(target=fetch_news_loop, daemon=True).start()
 root.mainloop()

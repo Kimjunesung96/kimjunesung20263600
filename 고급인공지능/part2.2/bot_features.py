@@ -5,7 +5,78 @@ import os
 import threading
 from tkinter import simpledialog
 import tkinter.messagebox as messagebox
+from PIL import ImageGrab
+import base64
+from io import BytesIO
 
+import requests
+
+# ---------------------------------------------------------
+# ⛅ 잃어버린 날씨 엔진 (WeatherFeature) 복구!
+# ---------------------------------------------------------
+class WeatherFeature:
+    WMO_MAP = {
+        0: ("☀️", "맑음"), 1: ("🌤️", "대체로 맑음"), 2: ("⛅", "구름조금"), 3: ("☁️", "흐림"),
+        45: ("🌫️", "안개"), 48: ("🌫️", "안개"),
+        51: ("🌧️", "가벼운 이슬비"), 53: ("🌧️", "이슬비"), 55: ("🌧️", "강한 이슬비"),
+        61: ("☔", "가벼운 비"), 63: ("☔", "비"), 65: ("☔", "강한 비"),
+        71: ("❄️", "가벼운 눈"), 73: ("❄️", "눈"), 75: ("❄️", "강한 눈"),
+        95: ("⛈️", "천둥번개")
+    }
+
+    @staticmethod
+    def get_weather_briefing(location="서울"):
+        try:
+            url = "https://api.open-meteo.com/v1/forecast?latitude=37.566&longitude=126.978&current_weather=true&hourly=temperature_2m,precipitation_probability,weathercode&timezone=Asia%2FSeoul"
+            data = requests.get(url, timeout=5).json()
+            
+            cur = data.get("current_weather", {})
+            cur_temp = cur.get("temperature", 0)
+            cur_code = cur.get("weathercode", 0)
+            
+            from datetime import datetime
+            now_hour = datetime.now().hour
+            hours = data["hourly"]["time"]
+            temps = data["hourly"]["temperature_2m"]
+            codes = data["hourly"]["weathercode"]
+            rains = data["hourly"]["precipitation_probability"]
+            
+            # 현재 시간의 강수 확률 찾기
+            cur_rain = 0
+            for i, t in enumerate(hours):
+                if int(t[11:13]) == now_hour:
+                    cur_rain = rains[i]
+                    break
+                    
+            icon, status = WeatherFeature.WMO_MAP.get(cur_code, ("⛅", "알 수 없음"))
+            briefing_text = f"🌡 현재 {location}: {status} {cur_temp}°C (강수 {cur_rain}%)\n\n"
+            will_rain = cur_rain >= 40 or "비" in status or "눈" in status or "소나기" in status
+            
+            count = 0
+            for i, t in enumerate(hours):
+                h = int(t[11:13])
+                if h <= now_hour: continue
+                
+                wicon, wstatus = WeatherFeature.WMO_MAP.get(codes[i], ("⛅", "?"))
+                briefing_text += f"▪ {h}시: {round(temps[i])}°C {wicon} {wstatus} (강수 {rains[i]}%)\n"
+                
+                if rains[i] >= 40 or "비" in wstatus or "눈" in wstatus:
+                    will_rain = True
+                
+                count += 1
+                if count >= 6: break
+
+            if will_rain:
+                icon = "☔"
+                briefing_text += "\n💡 비/눈 올 가능성 있어요! 우산 챙기세요!"
+                
+            return icon, briefing_text
+        except Exception as e:
+            return "⛅", "날씨 정보를 불러오지 못했습니다."
+
+# =========================================================
+# 이 아래부터는 원래 있던 class AssistantFeatures: 가 이어집니다!
+# =========================================================
 # 💡 주식 자동 갱신 주기 (초) — 여기서 바꾸세요!
 STOCK_REFRESH_SECONDS = 30
 
@@ -489,7 +560,6 @@ class AssistantFeatures:
                 else:
                     bg_color, fg_color, text = "#3c4043", "#b0b0b0", f"{name} : 정보 없음"
 
-                # 💡 [핵심] Label을 변수에 먼저 담고, 그 다음에 pack()을 해야 클릭(bind)이 먹힙니다!
                 lbl = tk.Label(
                     container, text=text,
                     bg=bg_color, fg=fg_color,
@@ -517,128 +587,429 @@ class AssistantFeatures:
             self.stock_win.geometry(f"+{tx}+{ty}")
 
     # ---------------------------------------------------------
-    # 💡 [신규] 주식 전광판 클릭 시 관련 뉴스 릴레이 브리핑!
-    # ---------------------------------------------------------
-    def on_stock_click(self, stock_name):
-        try:
-            conn = sqlite3.connect('news.db')
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            
-            # 주식 이름이 제목이나 요약에 들어간 최신 뉴스 3개 긁어오기!
-            query = "SELECT title, url FROM news WHERE title LIKE ? OR ai_summary LIKE ? ORDER BY created_at DESC LIMIT 3"
-            cursor.execute(query, (f"%{stock_name}%", f"%{stock_name}%"))
-            news_items = [dict(row) for row in cursor.fetchall()]
-            conn.close()
-            
-            if news_items:
-                # 뉴스가 있으면 릴레이 브리핑 시작!
-                self._play_stock_news(news_items, 0, stock_name)
-            else:
-                self.show_bubble(f"'{stock_name}' 관련 최근 뉴스가 없습니다 ㅠㅠ", "ALARM", 3000, True)
-        except Exception as e:
-            pass
-
-# ---------------------------------------------------------
     # 💡 [수정] 주식 전광판 클릭 시 리액트 웹으로 검색어 쏴버리기!
     # ---------------------------------------------------------
     def on_stock_click(self, stock_name):
-        # 💡 안전하게 맨 위에서 도구 상자(모듈)를 불러옵니다!
         import urllib.parse
         import webbrowser
         
-        # 주식 이름(예: 삼성전자)을 인터넷 주소용으로 변환
         safe_name = urllib.parse.quote(stock_name)
-        
-        # 🚨 [포트 번호 설정] 
-        # 리액트 화면이 5173이면 5173, 만약 선생님 환경에서 8000으로 리액트가 뜬다면 8000으로 바꿔주세요!
         PORT = 5173 
-        
         target_url = f"http://localhost:{PORT}/?search={safe_name}"
-        
-        # 브라우저 강제 호출!
         webbrowser.open(target_url)
-    # (주의: 기존에 있던 _play_stock_news 함수는 이제 안 쓰니까 싹 지워주시면 됩니다!)
 
-# =========================================================
-# ⛅ Open-Meteo 무료 기상 API (가입/API키 불필요)
-# =========================================================
-class WeatherFeature:
-    WMO_MAP = {
-        0:  ("☀️",  "맑음"),
-        1:  ("🌤️", "대체로 맑음"),
-        2:  ("⛅",  "부분 흐림"),
-        3:  ("☁️",  "흐림"),
-        45: ("🌫️", "안개"),
-        48: ("🌫️", "안개"),
-        51: ("🌦️", "가벼운 이슬비"),
-        53: ("🌦️", "이슬비"),
-        55: ("🌧️", "강한 이슬비"),
-        61: ("🌧️", "약한 비"),
-        63: ("🌧️", "비"),
-        65: ("🌧️", "강한 비"),
-        71: ("🌨️", "약한 눈"),
-        73: ("🌨️", "눈"),
-        75: ("🌨️", "강한 눈"),
-        80: ("🌦️", "소나기"),
-        81: ("🌧️", "강한 소나기"),
-        95: ("⛈️",  "뇌우"),
-        99: ("⛈️",  "강한 뇌우"),
-    }
+    # ---------------------------------------------------------
+    # 🧭 [가이드 모드 & 진행판 HUD] 부품 추가
+    # ---------------------------------------------------------
+    # ---------------------------------------------------------
+    # 🧭 [가이드 모드 & 진행판 HUD] 부품 추가
+    # ---------------------------------------------------------
+    def start_guide_mode(self):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("가이드 대본 입력")
+        dialog.attributes("-topmost", True)
+        dialog.configure(bg="#202124")
+        
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        w, h = sw // 2, sh // 2
+        dialog.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
+        
+        tk.Label(dialog, text="📝 대본을 입력하세요. (엔터 3번으로 단계 구분)", font=("맑은 고딕", 12, "bold"), bg="#202124", fg="white").pack(pady=10)
+        
+        input_area = tk.Text(dialog, font=("맑은 고딕", 11), wrap="word", bg="#3c4043", fg="white", insertbackground="white")
+        input_area.pack(fill="both", expand=True, padx=15, pady=5)
+        
+        guide_text = ""
+        def on_submit():
+            nonlocal guide_text
+            guide_text = input_area.get("1.0", "end-1c")
+            dialog.destroy()
+            
+        tk.Button(dialog, text="✅ 확인 (대본 입력 완료)", command=on_submit, bg="#4CAF50", fg="white", font=("맑은 고딕", 12, "bold"), padx=20).pack(pady=10)
+        
+        dialog.grab_set()
+        self.root.wait_window(dialog)
+        
+        if not guide_text.strip(): return
+        
+        steps = [s.strip() for s in guide_text.split('\n\n\n') if s.strip()]
+        if not steps: return
+        self.current_guide_step = 0
+        
+        # 2. 💡 [수정] 로봇 '왼쪽 옆구리'를 따라다니는 진행판! (뉴스와 겹침 방지)
+        hud = tk.Toplevel(self.root)
+        hud.overrideredirect(True)
+        hud.attributes("-topmost", True)
+        hud.configure(bg="#2b2b2b")
+        
+        def follow_robot():
+            if hud.winfo_exists():
+                rx, ry, rw = self.root.winfo_x(), self.root.winfo_y(), self.root.winfo_width()
+                hw, hh = hud.winfo_reqwidth(), hud.winfo_reqheight()
+                
+                # 💡 X좌표를 로봇 몸통 너비만큼 왼쪽으로 뺍니다!
+                tx = rx - hw - 15
+                ty = ry + (rw // 2) - (hh // 2)
+                
+                hud.geometry(f"+{tx}+{ty}")
+                hud.after(20, follow_robot)
+        follow_robot()
+        
+        # 단계 헤더
+        step_header = tk.Label(hud, text="", font=("맑은 고딕", 10, "bold"),
+                               fg="#fbbc05", bg="#2b2b2b")
+        step_header.pack(pady=(8, 4))
 
-    @staticmethod
-    def get_weather_briefing(location="서울"):
-        import requests
+        # 단어 버튼 영역
+        word_frame = tk.Frame(hud, bg="#2b2b2b")
+        word_frame.pack(padx=10, pady=(0, 6), fill="x")
 
-        url = (
-            "https://api.open-meteo.com/v1/forecast"
-            "?latitude=37.5665&longitude=126.9780"
-            "&current=temperature_2m,weathercode,precipitation_probability"
-            "&hourly=temperature_2m,weathercode,precipitation_probability"
-            "&timezone=Asia%2FSeoul&forecast_days=1"
-        )
+        def clear_word_buttons():
+            for w in word_frame.winfo_children():
+                w.destroy()
 
+        def build_word_buttons(text):
+            """공백으로 단어 분리 → 토글 버튼 생성"""
+            clear_word_buttons()
+            words = text.split()
+            row_frame = None
+            for i, word in enumerate(words):
+                if i % 6 == 0:  # 한 줄에 6개씩
+                    row_frame = tk.Frame(word_frame, bg="#2b2b2b")
+                    row_frame.pack(anchor="w", pady=1)
+                btn = tk.Button(
+                    row_frame, text=word,
+                    font=("맑은 고딕", 9, "bold"),
+                    bg="#3c4043", fg="white",
+                    relief="flat", cursor="hand2",
+                    padx=6, pady=3
+                )
+                btn.pack(side="left", padx=2)
+
+                def on_click(b=btn, w=word):
+                    # 토글: 선택 ↔ 해제
+                    if b.cget("bg") == "#e91e63":
+                        b.config(bg="#3c4043", fg="white")
+                    else:
+                        # 다른 버튼 초기화
+                        for rb in word_frame.winfo_children():
+                            for cb in rb.winfo_children():
+                                cb.config(bg="#3c4043", fg="white")
+                        b.config(bg="#e91e63", fg="white")
+                        # OCR 검색 실행
+                        self.start_tracking_target_by_word(w)
+
+                btn.config(command=on_click)
+
+        def update_hud():
+            if self.current_guide_step >= len(steps):
+                clear_word_buttons()
+                step_header.config(text="✅ 가이드 완료!")
+                btn_next.config(state="disabled")
+                hud.after(3000, hud.destroy)
+                return
+            current_idx = self.current_guide_step
+            step_header.config(text=f"[{current_idx + 1} / {len(steps)}]")
+            build_word_buttons(steps[current_idx])
+
+        def next_step():
+            self.current_guide_step += 1
+            if hasattr(self, 'active_tracking_boxes'):
+                for box in self.active_tracking_boxes:
+                    if box.winfo_exists():
+                        box.destroy()
+                self.active_tracking_boxes.clear()
+            update_hud()
+            
+        def report_error():
+            hud.withdraw()
+            self.root.update()
+            import time
+            time.sleep(0.3)
+            
+            try:
+                import base64
+                from io import BytesIO
+                from PIL import ImageGrab
+                import sqlite3
+                import tkinter.messagebox as messagebox
+                
+                img = ImageGrab.grab()
+                buffered = BytesIO()
+                img.save(buffered, format="PNG")
+                img_b64 = "data:image/png;base64," + base64.b64encode(buffered.getvalue()).decode()
+                error_msg = f"🚨 [오류 발생 단계] {steps[self.current_guide_step]}"
+                
+                import requests as _req
+                _req.post("http://localhost:8000/api/clipboard", json={"type": "text", "content": error_msg})
+                _req.post("http://localhost:8000/api/clipboard", json={"type": "image", "content": img_b64})
+                messagebox.showinfo("오류 캡처 완료", "리액트 클립보드에 자동 저장되었습니다!")
+            except Exception as e:
+                pass
+                
+            hud.deiconify()
+            
+        btn_frame = tk.Frame(hud, bg="#2b2b2b")
+        btn_frame.pack(side="bottom", pady=10)
+        
+        btn_next = tk.Button(btn_frame, text="▶ 다음", command=next_step, bg="#4CAF50", fg="white", font=("맑은 고딕", 10, "bold"))
+        btn_next.pack(side="left", padx=5)
+        
+        btn_error = tk.Button(btn_frame, text="🚨 오류", command=report_error, bg="#f44336", fg="white", font=("맑은 고딕", 10, "bold"))
+        btn_error.pack(side="left", padx=5)
+        
+        
+        btn_close = tk.Button(btn_frame, text="✖ 종료", command=hud.destroy, bg="#5f6368", fg="white", font=("맑은 고딕", 10, "bold"))
+        btn_close.pack(side="left", padx=5)
+        
+        update_hud()
+
+    # ---------------------------------------------------------
+    # 🎯 [신규] 실시간 타겟 추적 (채팅창 숫자 버그 완전 우회판!)
+    # ---------------------------------------------------------
+    def start_tracking_target_by_word(self, target_text):
+        """단어 버튼 클릭 시 바로 OCR 검색"""
+        self.show_bubble(f"\U0001f50d [{target_text}]\nWindows OCR \uc2a4\uce94 \uc911...", "ALARM", 2000, True)
+
+        import threading, io, asyncio, time
+        from PIL import ImageGrab
+
+        def draw_red_box(x, y, w, h, rank):
+            box_win = tk.Toplevel(self.root)
+            if not hasattr(self, 'active_tracking_boxes'):
+                self.active_tracking_boxes = []
+            self.active_tracking_boxes.append(box_win)
+            box_win.overrideredirect(True)
+            box_win.attributes("-topmost", True)
+            box_win.attributes("-transparentcolor", "white")
+            pad = 5
+            box_win.geometry(f"{w+pad*2}x{h+pad*2}+{x-pad}+{y-pad}")
+            canvas = tk.Canvas(box_win, bg="white", highlightthickness=0)
+            canvas.pack(fill="both", expand=True)
+            color = "red" if rank == 1 else "orange"
+            lw = 5 if rank == 1 else 2
+            canvas.create_rectangle(pad, pad, w+pad, h+pad, outline=color, width=lw)
+            box_win.bind("<Button-1>", lambda e: box_win.destroy())
+            canvas.bind("<Button-1>", lambda e: box_win.destroy())
+
+        async def run_ocr(pil_img):
+            from winrt.windows.media.ocr import OcrEngine
+            from winrt.windows.graphics.imaging import BitmapDecoder
+            from winrt.windows.storage.streams import InMemoryRandomAccessStream, DataWriter
+
+            buf = io.BytesIO()
+            pil_img.save(buf, format="PNG")
+            img_bytes = buf.getvalue()
+
+            lang = None
+            try:
+                for l in OcrEngine.get_available_recognizer_languages():
+                    if "ko" in l.language_tag.lower():
+                        lang = l
+                        break
+            except Exception:
+                pass
+
+            try:
+                engine = (OcrEngine.try_create_from_language(lang)
+                          if lang else OcrEngine.try_create_from_user_profile_languages())
+            except Exception:
+                engine = OcrEngine.try_create_from_user_profile_languages()
+
+            if engine is None:
+                return []
+
+            stream = InMemoryRandomAccessStream()
+            writer = DataWriter(stream)
+            writer.write_bytes(img_bytes)
+            await writer.store_async()
+            writer.detach_stream()
+            stream.seek(0)
+
+            decoder = await BitmapDecoder.create_async(stream)
+            bitmap = await decoder.get_software_bitmap_async()
+            result = await engine.recognize_async(bitmap)
+
+            words = []
+            for line in result.lines:
+                for word in line.words:
+                    r = word.bounding_rect
+                    words.append({"text": word.text,
+                                  "x": int(r.x), "y": int(r.y),
+                                  "w": int(r.width), "h": int(r.height)})
+            return words
+
+        def loop():
+            while True:
+                screen_img = ImageGrab.grab()
+                try:
+                    ev_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(ev_loop)
+                    words = ev_loop.run_until_complete(run_ocr(screen_img))
+                    ev_loop.close()
+                except Exception as e:
+                    self.root.after(0, lambda err=str(e): self.show_bubble(
+                        f"\u274c OCR \uc624\ub958\n{err[:50]}", "ALARM", 3000, True))
+                    return
+
+                found = []
+                seen = set()
+                for word in words:
+                    wt = word["text"]
+                    if target_text in wt or wt in target_text:
+                        pos_key = (word["x"] // 50, word["y"] // 50)
+                        if pos_key in seen:
+                            continue
+                        seen.add(pos_key)
+                        found.append(word)
+
+                if found:
+                    for i, word in enumerate(found[:3]):
+                        x, y, w, h = word["x"], word["y"], word["w"], word["h"]
+                        self.root.after(0, lambda a=x, b=y, c=w, d=h, r=i+1:
+                                        draw_red_box(a, b, c, d, r))
+                        if i == 0:
+                            self.root.after(0, lambda wd=word["text"]:
+                                self.show_bubble(
+                                    f"\U0001f3af [{wd}] \ubc1c\uacac!",
+                                    "ALARM", 3000, True))
+                    break
+                else:
+                    self.root.after(0, lambda: self.show_bubble(
+                        f"\U0001f605 [{target_text}] \ubabb \ucc3e\uc74c\n\ub2e4\uc2dc \uc2dc\ub3c4...",
+                        "ALARM", 2000, True))
+                    time.sleep(1)
+
+        threading.Thread(target=loop, daemon=True).start()
+
+    def start_tracking_target(self, text_widget):
         try:
-            res = requests.get(url, timeout=10)
-            data = res.json()
+            target_text = text_widget.get(tk.SEL_FIRST, tk.SEL_LAST).strip()
+        except tk.TclError:
+            self.show_bubble("찾을 글자를 먼저 마우스로 긁어주세요!", "ALARM", 3000, True)
+            return
 
-            cur = data["current"]
-            cur_temp   = round(cur["temperature_2m"])
-            cur_code   = cur["weathercode"]
-            cur_rain   = cur["precipitation_probability"]
-            icon, status = WeatherFeature.WMO_MAP.get(cur_code, ("⛅", "알 수 없음"))
+        if not target_text: return
+        self.show_bubble(f"\U0001f50d [{target_text}]\nWindows OCR 스캔 중...", "ALARM", 2000, True)
 
-            from datetime import datetime
-            now_hour = datetime.now().hour
-            hours    = data["hourly"]["time"]
-            temps    = data["hourly"]["temperature_2m"]
-            codes    = data["hourly"]["weathercode"]
-            rains    = data["hourly"]["precipitation_probability"]
+        import threading
 
-            briefing_text = f"🌡 현재 {location}: {status} {cur_temp}°C (강수 {cur_rain}%)\n\n"
-            will_rain = cur_rain >= 40 or "비" in status or "눈" in status or "소나기" in status
+        def draw_red_box(x, y, w, h, rank):
+            box_win = tk.Toplevel(self.root)
+            if not hasattr(self, 'active_tracking_boxes'):
+                self.active_tracking_boxes = []
+            self.active_tracking_boxes.append(box_win)
+            box_win.overrideredirect(True)
+            box_win.attributes("-topmost", True)
+            box_win.attributes("-transparentcolor", "white")
+            pad = 5
+            box_win.geometry(f"{w + pad*2}x{h + pad*2}+{x - pad}+{y - pad}")
+            canvas = tk.Canvas(box_win, bg="white", highlightthickness=0)
+            canvas.pack(fill="both", expand=True)
+            color = "red" if rank == 1 else "orange"
+            lw = 5 if rank == 1 else 2
+            canvas.create_rectangle(pad, pad, w + pad, h + pad, outline=color, width=lw)
+            box_win.bind("<Button-1>", lambda e: box_win.destroy())
+            canvas.bind("<Button-1>", lambda e: box_win.destroy())
 
-            count = 0
-            for i, t in enumerate(hours):
-                h = int(t[11:13])
-                if h <= now_hour: continue
-                
-                wicon, wstatus = WeatherFeature.WMO_MAP.get(codes[i], ("⛅", "?"))
-                briefing_text += f"▪ {h}시: {round(temps[i])}°C {wicon} {wstatus} (강수 {rains[i]}%)\n"
-                
-                if rains[i] >= 40 or "비" in wstatus or "눈" in wstatus:
-                    will_rain = True
-                
-                count += 1
-                if count >= 6: break
+        def tracking_loop():
+            import asyncio, time, io
+            from PIL import ImageGrab
 
-            if will_rain:
-                icon = "☔"
-                briefing_text += "\n💡 비/눈 올 가능성 있어요! 우산 챙기세요!"
-            else:
-                briefing_text += "\n💡 오늘 비 소식 없음! 좋은 하루 보내세요!"
+            async def run_ocr(pil_img):
+                from winrt.windows.media.ocr import OcrEngine
+                from winrt.windows.graphics.imaging import BitmapDecoder
+                from winrt.windows.storage.streams import (
+                    InMemoryRandomAccessStream, DataWriter)
 
-            return icon, briefing_text
+                # PIL → PNG bytes
+                buf = io.BytesIO()
+                pil_img.save(buf, format="PNG")
+                img_bytes = buf.getvalue()
 
-        except Exception as e:
-            return "❓", f"날씨 정보를 불러오지 못했어요.\n({e})"
+                # 한국어 엔진 우선
+                lang = None
+                try:
+                    for l in OcrEngine.get_available_recognizer_languages():
+                        if "ko" in l.language_tag.lower():
+                            lang = l
+                            break
+                except Exception:
+                    pass
+
+                try:
+                    engine = (OcrEngine.try_create_from_language(lang)
+                              if lang else
+                              OcrEngine.try_create_from_user_profile_languages())
+                except Exception:
+                    engine = OcrEngine.try_create_from_user_profile_languages()
+
+                if engine is None:
+                    return []
+
+                # bytes → stream → bitmap
+                stream = InMemoryRandomAccessStream()
+                writer = DataWriter(stream)
+                writer.write_bytes(img_bytes)
+                await writer.store_async()
+                writer.detach_stream()
+                stream.seek(0)
+
+                decoder = await BitmapDecoder.create_async(stream)
+                bitmap = await decoder.get_software_bitmap_async()
+
+                result = await engine.recognize_async(bitmap)
+
+                words = []
+                for line in result.lines:
+                    for word in line.words:
+                        r = word.bounding_rect
+                        words.append({
+                            "text": word.text,
+                            "x": int(r.x), "y": int(r.y),
+                            "w": int(r.width), "h": int(r.height),
+                        })
+                return words
+
+            while True:
+                screen_img = ImageGrab.grab()
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    words = loop.run_until_complete(run_ocr(screen_img))
+                    loop.close()
+                except Exception as e:
+                    self.root.after(0, lambda err=str(e): self.show_bubble(
+                        f"\u274c OCR \uc624\ub958\n{err[:50]}", "ALARM", 3000, True))
+                    return
+
+                found = []
+                seen = set()
+                for word in words:
+                    wt = word["text"]
+                    if target_text in wt or wt in target_text:
+                        pos_key = (word["x"] // 50, word["y"] // 50)
+                        if pos_key in seen:
+                            continue
+                        seen.add(pos_key)
+                        found.append(word)
+
+                if found:
+                    for i, word in enumerate(found[:3]):
+                        x, y, w, h = word["x"], word["y"], word["w"], word["h"]
+                        self.root.after(0, lambda a=x, b=y, c=w, d=h, r=i+1:
+                                        draw_red_box(a, b, c, d, r))
+                        if i == 0:
+                            self.root.after(0, lambda wd=word["text"]:
+                                self.show_bubble(
+                                    f"\U0001f3af \ubc1c\uacac! [{wd}]\nWindows OCR \uc131\uacf5!",
+                                    "ALARM", 3000, True))
+                    break
+                else:
+                    self.root.after(0, lambda: self.show_bubble(
+                        f"\U0001f605 [{target_text}] \ubabb \ucc3e\uc558\uc5b4\uc694\n\ub2e4\uc2dc \uc2dc\ub3c4 \uc911...",
+                        "ALARM", 2000, True))
+                    time.sleep(1)
+
+        threading.Thread(target=tracking_loop, daemon=True).start()
