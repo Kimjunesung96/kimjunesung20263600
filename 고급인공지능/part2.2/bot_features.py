@@ -669,13 +669,53 @@ class AssistantFeatures:
             for w in word_frame.winfo_children():
                 w.destroy()
 
+        # 선택된 단어 버튼 목록
+        selected_btns = []
+        selected_words = []
+
+        def search_selected():
+            """선택된 단어들을 공백으로 합쳐서 OCR 검색"""
+            if not selected_words:
+                return
+            query = " ".join(selected_words)
+            self.start_tracking_target_by_word(query)
+
+        # 검색 버튼 (단어 버튼 위에 배치)
+        search_bar = tk.Frame(hud, bg="#2b2b2b")
+        search_bar.pack(fill="x", padx=10, pady=(0, 4))
+
+        selected_label = tk.Label(search_bar, text="선택: 없음",
+                                  font=("맑은 고딕", 8), fg="#aaaaaa", bg="#2b2b2b")
+        selected_label.pack(side="left", expand=True, anchor="w")
+
+        tk.Button(search_bar, text="🔍 검색", font=("맑은 고딕", 9, "bold"),
+                  bg="#1a73e8", fg="white", relief="flat", cursor="hand2",
+                  padx=8, pady=2, command=search_selected).pack(side="right", padx=(4,0))
+
+        tk.Button(search_bar, text="✖ 초기화", font=("맑은 고딕", 9),
+                  bg="#5f6368", fg="white", relief="flat", cursor="hand2",
+                  padx=6, pady=2,
+                  command=lambda: clear_selection()).pack(side="right", padx=2)
+
+        def clear_selection():
+            for b in selected_btns:
+                if b.winfo_exists():
+                    b.config(bg="#3c4043", fg="white")
+            selected_btns.clear()
+            selected_words.clear()
+            selected_label.config(text="선택: 없음")
+
         def build_word_buttons(text):
-            """공백으로 단어 분리 → 토글 버튼 생성"""
+            """공백으로 단어 분리 → 다중 토글 버튼 생성"""
             clear_word_buttons()
+            selected_btns.clear()
+            selected_words.clear()
+            selected_label.config(text="선택: 없음")
+
             words = text.split()
             row_frame = None
             for i, word in enumerate(words):
-                if i % 6 == 0:  # 한 줄에 6개씩
+                if i % 6 == 0:
                     row_frame = tk.Frame(word_frame, bg="#2b2b2b")
                     row_frame.pack(anchor="w", pady=1)
                 btn = tk.Button(
@@ -688,17 +728,21 @@ class AssistantFeatures:
                 btn.pack(side="left", padx=2)
 
                 def on_click(b=btn, w=word):
-                    # 토글: 선택 ↔ 해제
-                    if b.cget("bg") == "#e91e63":
+                    if b in selected_btns:
+                        # 선택 해제
                         b.config(bg="#3c4043", fg="white")
+                        selected_btns.remove(b)
+                        selected_words.remove(w)
                     else:
-                        # 다른 버튼 초기화
-                        for rb in word_frame.winfo_children():
-                            for cb in rb.winfo_children():
-                                cb.config(bg="#3c4043", fg="white")
+                        # 선택 추가
                         b.config(bg="#e91e63", fg="white")
-                        # OCR 검색 실행
-                        self.start_tracking_target_by_word(w)
+                        selected_btns.append(b)
+                        selected_words.append(w)
+
+                    if selected_words:
+                        selected_label.config(text=f"선택: {' '.join(selected_words)}")
+                    else:
+                        selected_label.config(text="선택: 없음")
 
                 btn.config(command=on_click)
 
