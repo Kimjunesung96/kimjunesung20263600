@@ -86,6 +86,10 @@ class AssistantFeatures:
         self.face_label = face_label
         self.show_bubble = show_bubble_func
         
+        # 💡 [핵심 추가] 킬 스위치 & 박스 리스트 (여기서 정의하고 시작해야 오류 안 납니다)
+        self.stop_tracking = False 
+        self.active_tracking_boxes = []
+        
         self.timer_seconds = 0
         self.is_timer_running = False
         self.target_alarm_time = ""
@@ -100,9 +104,7 @@ class AssistantFeatures:
         self.start_y = 0
         self.rect = None
 
-        # ---------------------------------------------------------
-        # ⛅ 날씨 아이콘 세팅
-        # ---------------------------------------------------------
+        # ⛅ 날씨 아이콘 세팅 (기존 코드 유지)
         self.weather_label = tk.Label(
             self.root, 
             text="⛅", 
@@ -118,6 +120,14 @@ class AssistantFeatures:
         self.weather_label.bind("<Button-1>", self.on_weather_click)
         self.current_weather_briefing = "날씨 정보를 불러오는 중입니다..."
         self.update_weather()
+    def kill_all_tracking(self):
+        """💣 모든 좀비 박스 삭제 + 탐색 루프 즉시 중단"""
+        self.stop_tracking = True # 🚨 루프를 여기서 끊어버립니다.
+        if hasattr(self, 'active_tracking_boxes'):
+            for box in self.active_tracking_boxes:
+                if box.winfo_exists():
+                    box.destroy()
+            self.active_tracking_boxes.clear()
 
 
     def on_weather_click(self, event):
@@ -697,6 +707,8 @@ class AssistantFeatures:
                   padx=6, pady=2,
                   command=lambda: clear_selection()).pack(side="right", padx=2)
 
+
+
         def clear_selection():
             for b in selected_btns:
                 if b.winfo_exists():
@@ -759,12 +771,12 @@ class AssistantFeatures:
 
         def next_step():
             self.current_guide_step += 1
-            if hasattr(self, 'active_tracking_boxes'):
-                for box in self.active_tracking_boxes:
-                    if box.winfo_exists():
-                        box.destroy()
-                self.active_tracking_boxes.clear()
+            self.kill_all_tracking() # 💣 변경: 다음 단계 가기 전 무조건 폭파
             update_hud()
+
+        def on_close():
+            self.kill_all_tracking() # 💣 변경: 종료 전 무조건 폭파
+            hud.destroy()
             
         def report_error():
             hud.withdraw()
@@ -803,8 +815,7 @@ class AssistantFeatures:
         btn_error = tk.Button(btn_frame, text="🚨 오류", command=report_error, bg="#f44336", fg="white", font=("맑은 고딕", 10, "bold"))
         btn_error.pack(side="left", padx=5)
         
-        
-        btn_close = tk.Button(btn_frame, text="✖ 종료", command=hud.destroy, bg="#5f6368", fg="white", font=("맑은 고딕", 10, "bold"))
+        btn_close = tk.Button(btn_frame, text="✖ 종료", command=on_close, bg="#5f6368", fg="white", font=("맑은 고딕", 10, "bold"))
         btn_close.pack(side="left", padx=5)
         
         update_hud()
@@ -885,7 +896,8 @@ class AssistantFeatures:
             return words
 
         def loop():
-            while True:
+            self.stop_tracking = False # 💡 [추가] 시작할 때 스위치 켜기
+            while not self.stop_tracking: # 🚨 [변경] 무한 루프를 스위치 제어로
                 screen_img = ImageGrab.grab()
                 try:
                     ev_loop = asyncio.new_event_loop()
@@ -958,6 +970,7 @@ class AssistantFeatures:
             canvas.bind("<Button-1>", lambda e: box_win.destroy())
 
         def tracking_loop():
+            self.stop_tracking = False  # 💡 [필수 추가] 루프 시작할 때 스위치를 다시 켭니다!
             import asyncio, time, io
             from PIL import ImageGrab
 
@@ -967,12 +980,10 @@ class AssistantFeatures:
                 from winrt.windows.storage.streams import (
                     InMemoryRandomAccessStream, DataWriter)
 
-                # PIL → PNG bytes
                 buf = io.BytesIO()
                 pil_img.save(buf, format="PNG")
                 img_bytes = buf.getvalue()
 
-                # 한국어 엔진 우선
                 lang = None
                 try:
                     for l in OcrEngine.get_available_recognizer_languages():
@@ -992,7 +1003,6 @@ class AssistantFeatures:
                 if engine is None:
                     return []
 
-                # bytes → stream → bitmap
                 stream = InMemoryRandomAccessStream()
                 writer = DataWriter(stream)
                 writer.write_bytes(img_bytes)
@@ -1016,7 +1026,7 @@ class AssistantFeatures:
                         })
                 return words
 
-            while True:
+            while not self.stop_tracking: # 🚨 [변경] 무한 루프를 스위치 제어로
                 screen_img = ImageGrab.grab()
                 try:
                     loop = asyncio.new_event_loop()
@@ -1047,13 +1057,12 @@ class AssistantFeatures:
                         if i == 0:
                             self.root.after(0, lambda wd=word["text"]:
                                 self.show_bubble(
-                                    f"\U0001f3af \ubc1c\uacac! [{wd}]\nWindows OCR \uc131\uacf5!",
+                                    f"\U0001f3af [{wd}] \ubc1c\uacac!",
                                     "ALARM", 3000, True))
                     break
                 else:
                     self.root.after(0, lambda: self.show_bubble(
-                        f"\U0001f605 [{target_text}] \ubabb \ucc3e\uc558\uc5b4\uc694\n\ub2e4\uc2dc \uc2dc\ub3c4 \uc911...",
+                        f"\U0001f605 [{target_text}] \ubabb \ucc3e\uc558\uc5b4\uc694\n\ub2e4\uc2dc \uc2dc\ub3c4...",
                         "ALARM", 2000, True))
                     time.sleep(1)
-
         threading.Thread(target=tracking_loop, daemon=True).start()

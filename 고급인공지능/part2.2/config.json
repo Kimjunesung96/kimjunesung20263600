@@ -1,1 +1,1 @@
-{"alarm_interval": 1, "enabled_categories": ["01", "02", "04"], "bubble_duration": 7, "news_count": 30, "custom_keyword": "\ud2b8\ub7fc\ud504"}
+{"alarm_interval": 10, "enabled_categories": ["01", "02", "03", "04", "05", "08", "07", "06"], "bubble_duration": 5, "news_count": 10, "custom_keyword": ""}

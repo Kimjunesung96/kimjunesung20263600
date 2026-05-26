@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import Calendar from './Calendar'; 
 import Clipboard from './Clipboard';
 
@@ -9,15 +9,19 @@ const ALL_CATEGORIES = [
   { id: '07', name: '과학' }, { id: '08', name: '건강' },
 ];
 
+const PAGE_SIZE = 10; // 한 번에 가져올 뉴스 수
+
 export default function App() {
   const [homeMode, setHomeMode] = useState('news'); 
 
   const [activeTab, setActiveTab] = useState('01'); 
   const [newsList, setNewsList] = useState([]); 
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false); // ✅ 추가 로딩용
+  const [hasMore, setHasMore] = useState(true);              // ✅ 더 불러올 게 있는지
+  const [offset, setOffset] = useState(0);                   // ✅ 현재 offset
   const [currentMenu, setCurrentMenu] = useState('home');
   
-  const [displayCount, setDisplayCount] = useState(10); 
   const [searchKeyword, setSearchKeyword] = useState("");
 
   const [alarmInterval, setAlarmInterval] = useState(10);
@@ -29,10 +33,18 @@ export default function App() {
   const [newStockName, setNewStockName] = useState("");
   const [searchResults, setSearchResults] = useState([]); 
 
-  // ✅ 수정: activeStock은 항상 단일 객체 또는 null
   const [activeStock, setActiveStock] = useState(null);
   const [stockDetail, setStockDetail] = useState(null);
+  const [lastUpdated, setLastUpdated] = useState(null);
 
+  const alarmIntervalRef = useRef(alarmInterval);
+  useEffect(() => { alarmIntervalRef.current = alarmInterval; }, [alarmInterval]);
+
+  // ✅ 스크롤 감지용 ref
+  const scrollContainerRef = useRef(null);
+  const isFetchingMoreRef = useRef(false); // 중복 요청 방지
+
+  // ─── URL 쿼리 파라미터로 검색어 처리 ───
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const query = params.get('search');
@@ -43,6 +55,7 @@ export default function App() {
     }
   }, []);
 
+  // ─── 초기 설정 + 주식 목록 로드 ───
   useEffect(() => {
     fetch("http://localhost:8000/api/settings")
       .then(res => res.json())
@@ -52,7 +65,6 @@ export default function App() {
         if (data.bubble_duration !== undefined) setBubbleDuration(data.bubble_duration);
         if (data.news_count !== undefined) setNewsCount(data.news_count);
       });
-      
     fetchStocks();
   }, []);
 
@@ -62,60 +74,150 @@ export default function App() {
       .then(data => { 
         if (data.status === 'success') {
           setFavoriteStocks(data.data);
-          // ✅ 수정: 배열 전체가 아닌 첫 번째 항목만 activeStock으로 설정
           setActiveStock(prev => {
-            if (prev) return prev; // 이미 선택된 게 있으면 유지
+            if (prev) return prev;
             return data.data.length > 0 ? data.data[0] : null;
           });
         }
       });
   };
 
-  // 뉴스 탭 fetch
+  // ─────────────────────────────────────────────────────────
+  // ✅ URL 생성 헬퍼
+  // ─────────────────────────────────────────────────────────
+  const buildNewsUrl = useCallback((currentOffset) => {
+    if (searchKeyword)
+      return `http://localhost:8000/api/search?q=${encodeURIComponent(searchKeyword)}&limit=${PAGE_SIZE}&offset=${currentOffset}`;
+    return `http://localhost:8000/api/news/${activeTab}?limit=${PAGE_SIZE}&offset=${currentOffset}`;
+  }, [activeTab, searchKeyword]);
+
+  // ─────────────────────────────────────────────────────────
+  // ✅ 뉴스 최초 로드 (탭/검색어 바뀔 때)
+  // ─────────────────────────────────────────────────────────
+  const fetchNews = useCallback((isBackground = false) => {
+    if (!isBackground) {
+      setIsLoading(true);
+      setNewsList([]);
+      setOffset(0);
+      setHasMore(true);
+    }
+    fetch(buildNewsUrl(0))
+      .then(res => res.json())
+      .then(result => {
+        if (result.status === "success") {
+          setNewsList(result.data);
+          setOffset(result.data.length);
+          setHasMore(result.data.length === PAGE_SIZE);
+          setLastUpdated(new Date());
+        }
+        if (!isBackground) setIsLoading(false);
+      })
+      .catch(err => { console.error(err); if (!isBackground) setIsLoading(false); });
+  }, [buildNewsUrl]);
+
+  // ─────────────────────────────────────────────────────────
+  // ✅ 추가 뉴스 로드 (스크롤 바닥 도달 시)
+  // ─────────────────────────────────────────────────────────
+  const fetchMoreNews = useCallback(() => {
+    if (isFetchingMoreRef.current || !hasMore || homeMode !== 'news') return;
+    isFetchingMoreRef.current = true;
+    setIsLoadingMore(true);
+
+    fetch(buildNewsUrl(offset))
+      .then(res => res.json())
+      .then(result => {
+        if (result.status === "success") {
+          setNewsList(prev => [...prev, ...result.data]);
+          setOffset(prev => prev + result.data.length);
+          setHasMore(result.data.length === PAGE_SIZE);
+        }
+      })
+      .catch(err => console.error(err))
+      .finally(() => {
+        setIsLoadingMore(false);
+        isFetchingMoreRef.current = false;
+      });
+  }, [buildNewsUrl, offset, hasMore, homeMode]);
+
+  // ─────────────────────────────────────────────────────────
+  // ✅ 스크롤 이벤트 감지
+  // ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+
+    const handleScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = el;
+      // 바닥에서 150px 이내면 추가 로드
+      if (scrollHeight - scrollTop - clientHeight < 150) {
+        fetchMoreNews();
+      }
+    };
+
+    el.addEventListener('scroll', handleScroll);
+    return () => el.removeEventListener('scroll', handleScroll);
+  }, [fetchMoreNews]);
+
+  // ─────────────────────────────────────────────────────────
+  // ✅ 뉴스 탭 자동 갱신
+  // ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (currentMenu !== 'home' || homeMode !== 'news') return;
-    setIsLoading(true); 
-    setDisplayCount(10); 
+    fetchNews(false);
+    const intervalMs = alarmIntervalRef.current * 60 * 1000;
+    const intervalId = setInterval(() => fetchNews(true), intervalMs);
+    return () => clearInterval(intervalId);
+  }, [activeTab, currentMenu, searchKeyword, homeMode, fetchNews]);
 
-    const fetchUrl = searchKeyword 
-        ? `http://localhost:8000/api/search?q=${encodeURIComponent(searchKeyword)}`
-        : `http://localhost:8000/api/news/${activeTab}`;
-
-    fetch(fetchUrl)
-      .then(response => response.json())
-      .then(result => {
-        if (result.status === "success") setNewsList(result.data);
-        setIsLoading(false); 
-      })
-      .catch(error => { console.error(error); setIsLoading(false); });
-  }, [activeTab, currentMenu, searchKeyword, homeMode]); 
-
-  // ✅ 주식 탭 fetch — activeStock이 올바른 단일 객체일 때만 실행
-  useEffect(() => {
-    if (currentMenu !== 'home' || homeMode !== 'stock' || !activeStock || !activeStock.ticker) return;
-    setIsLoading(true);
-    setDisplayCount(10);
-    setStockDetail(null);
-    setNewsList([]);
-
-    // 주가 정보 fetch
+  // ─────────────────────────────────────────────────────────
+  // ✅ 주식 탭
+  // ─────────────────────────────────────────────────────────
+  const fetchStockData = useCallback((isBackground = false) => {
+    if (!activeStock?.ticker) return;
+    if (!isBackground) {
+      setIsLoading(true);
+      setStockDetail(null);
+      setNewsList([]);
+      setHasMore(false);
+    }
     fetch(`http://localhost:8000/api/stock/${activeStock.ticker}`)
       .then(res => res.json())
       .then(data => {
         if (data.status === 'success') setStockDetail(data);
-        else setStockDetail(null);
+        else if (!isBackground) setStockDetail(null);
       })
-      .catch(() => setStockDetail(null));
+      .catch(() => { if (!isBackground) setStockDetail(null); });
 
-    // 관련 뉴스 fetch (종목명으로 검색)
-    fetch(`http://localhost:8000/api/search?q=${encodeURIComponent(activeStock.name)}`)
+    fetch(`http://localhost:8000/api/search?q=${encodeURIComponent(activeStock.name)}&limit=30&offset=0`)
       .then(res => res.json())
       .then(result => {
-        if (result.status === "success") setNewsList(result.data);
-        setIsLoading(false);
+        if (result.status === "success") {
+          setNewsList(result.data);
+          setLastUpdated(new Date());
+        }
+        if (!isBackground) setIsLoading(false);
       })
-      .catch(() => setIsLoading(false));
-  }, [activeStock, currentMenu, homeMode]);
+      .catch(() => { if (!isBackground) setIsLoading(false); });
+  }, [activeStock]);
+
+  useEffect(() => {
+    if (currentMenu !== 'home' || homeMode !== 'stock' || !activeStock?.ticker) return;
+    fetchStockData(false);
+    const intervalId = setInterval(() => fetchStockData(true), 30 * 1000);
+    return () => clearInterval(intervalId);
+  }, [activeStock, currentMenu, homeMode, fetchStockData]);
+
+  // ─────────────────────────────────────────────────────────
+  // ✅ 홈 탭으로 돌아올 때 즉시 갱신
+  // ─────────────────────────────────────────────────────────
+  const prevMenuRef = useRef(currentMenu);
+  useEffect(() => {
+    if (prevMenuRef.current !== 'home' && currentMenu === 'home') {
+      if (homeMode === 'news') fetchNews(false);
+      else if (homeMode === 'stock') fetchStockData(false);
+    }
+    prevMenuRef.current = currentMenu;
+  }, [currentMenu, homeMode, fetchNews, fetchStockData]);
 
   const openNewsLink = (url) => window.open(url, '_blank');
 
@@ -125,7 +227,12 @@ export default function App() {
       body: JSON.stringify({ alarm_interval: newInterval, enabled_categories: newCategories, bubble_duration: parseInt(newDuration) || 0, news_count: parseInt(newCount) || 0 })
     });
   };
-  const handleIntervalChange = (val) => { setAlarmInterval(parseInt(val)); saveAllSettings(parseInt(val), enabledCategories, bubbleDuration, newsCount); };
+  const handleIntervalChange = (val) => {
+    const parsed = parseInt(val);
+    setAlarmInterval(parsed);
+    alarmIntervalRef.current = parsed;
+    saveAllSettings(parsed, enabledCategories, bubbleDuration, newsCount);
+  };
   const handleCategoryToggle = (id) => {
     const next = enabledCategories.includes(id) ? enabledCategories.filter(c => c !== id) : [...enabledCategories, id];
     if (next.length === 0) return;
@@ -158,20 +265,21 @@ export default function App() {
   const handleDeleteStock = (id) => {
     if(window.confirm("이 종목을 삭제할까요?")) {
       fetch(`http://localhost:8000/api/favorites/${id}`, { method: "DELETE" }).then(() => {
-        // ✅ 삭제 후 activeStock이 사라진 항목이면 초기화
         setActiveStock(prev => (prev?.id === id ? null : prev));
         fetchStocks();
       });
     }
   };
 
-  // ✅ 주식 탭으로 전환할 때 favoriteStocks[0] 자동 선택
   const handleSwitchToStock = () => {
     setHomeMode('stock');
     setSearchKeyword("");
-    if (!activeStock && favoriteStocks.length > 0) {
-      setActiveStock(favoriteStocks[0]);
-    }
+    if (!activeStock && favoriteStocks.length > 0) setActiveStock(favoriteStocks[0]);
+  };
+
+  const formatLastUpdated = (date) => {
+    if (!date) return null;
+    return date.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   };
 
   return (
@@ -184,16 +292,12 @@ export default function App() {
         
         {currentMenu === 'home' && (
           <div style={{ display: 'flex', padding: '0 15px', marginTop: '10px' }}>
-            <div 
-              onClick={() => setHomeMode('news')}
-              style={{ flex: 1, padding: '10px 0', fontWeight: 'bold', cursor: 'pointer', borderBottom: homeMode === 'news' ? '3px solid white' : '3px solid transparent', color: homeMode === 'news' ? 'white' : 'rgba(255,255,255,0.6)', transition: 'all 0.2s' }}
-            >
+            <div onClick={() => setHomeMode('news')}
+              style={{ flex: 1, padding: '10px 0', fontWeight: 'bold', cursor: 'pointer', borderBottom: homeMode === 'news' ? '3px solid white' : '3px solid transparent', color: homeMode === 'news' ? 'white' : 'rgba(255,255,255,0.6)', transition: 'all 0.2s' }}>
               📰 주요 뉴스
             </div>
-            <div 
-              onClick={handleSwitchToStock}
-              style={{ flex: 1, padding: '10px 0', fontWeight: 'bold', cursor: 'pointer', borderBottom: homeMode === 'stock' ? '3px solid white' : '3px solid transparent', color: homeMode === 'stock' ? 'white' : 'rgba(255,255,255,0.6)', transition: 'all 0.2s' }}
-            >
+            <div onClick={handleSwitchToStock}
+              style={{ flex: 1, padding: '10px 0', fontWeight: 'bold', cursor: 'pointer', borderBottom: homeMode === 'stock' ? '3px solid white' : '3px solid transparent', color: homeMode === 'stock' ? 'white' : 'rgba(255,255,255,0.6)', transition: 'all 0.2s' }}>
               📈 관심 주식
             </div>
           </div>
@@ -201,66 +305,56 @@ export default function App() {
       </div>
 
       {currentMenu === 'home' && (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           
           {/* ── 카테고리 / 종목 버튼 바 ── */}
-          <div style={{ display: 'flex', overflowX: 'auto', padding: '10px', gap: '8px', backgroundColor: 'white', whiteSpace: 'nowrap', borderBottom: '1px solid #ddd' }}>
-            
-            {/* 뉴스 탭: 카테고리 버튼 */}
+          <div style={{ display: 'flex', overflowX: 'auto', padding: '10px', gap: '8px', backgroundColor: 'white', whiteSpace: 'nowrap', borderBottom: '1px solid #ddd', flexShrink: 0 }}>
             {homeMode === 'news' && ALL_CATEGORIES
               .filter(cat => enabledCategories.includes(cat.id))
               .map(cat => (
-                <button 
-                  key={cat.id} 
+                <button key={cat.id} 
                   onClick={() => { setSearchKeyword(""); setActiveTab(cat.id); window.history.pushState({}, '', '/'); }} 
-                  style={{ 
-                    padding: '8px 16px', borderRadius: '20px', border: 'none', 
-                    backgroundColor: activeTab === cat.id && !searchKeyword ? '#1a73e8' : '#f1f3f4', 
-                    color: activeTab === cat.id && !searchKeyword ? 'white' : '#5f6368', 
-                    fontWeight: 'bold', cursor: 'pointer', transition: 'all 0.2s',
-                    flexShrink: 0
-                  }}
-                >
+                  style={{ padding: '8px 16px', borderRadius: '20px', border: 'none', backgroundColor: activeTab === cat.id && !searchKeyword ? '#1a73e8' : '#f1f3f4', color: activeTab === cat.id && !searchKeyword ? 'white' : '#5f6368', fontWeight: 'bold', cursor: 'pointer', transition: 'all 0.2s', flexShrink: 0 }}>
                   {cat.name}
                 </button>
               ))
             }
-
-            {/* 주식 탭: 종목 버튼 */}
             {homeMode === 'stock' && favoriteStocks.length > 0 && favoriteStocks.map(stock => (
-              <button 
-                key={stock.id} 
-                onClick={() => setActiveStock(stock)} 
-                style={{ 
-                  padding: '8px 16px', borderRadius: '20px', border: 'none', 
-                  backgroundColor: activeStock?.id === stock.id ? '#34a853' : '#e6f4ea', 
-                  color: activeStock?.id === stock.id ? 'white' : '#137333', 
-                  fontWeight: 'bold', cursor: 'pointer', transition: 'all 0.2s',
-                  flexShrink: 0
-                }}
-              >
+              <button key={stock.id} onClick={() => setActiveStock(stock)} 
+                style={{ padding: '8px 16px', borderRadius: '20px', border: 'none', backgroundColor: activeStock?.id === stock.id ? '#34a853' : '#e6f4ea', color: activeStock?.id === stock.id ? 'white' : '#137333', fontWeight: 'bold', cursor: 'pointer', transition: 'all 0.2s', flexShrink: 0 }}>
                 {stock.name}
               </button>
             ))}
-
-            {/* 주식 탭: 종목 없을 때 안내 */}
             {homeMode === 'stock' && favoriteStocks.length === 0 && (
-              <span style={{ color: '#888', fontSize: '0.85rem', padding: '8px 5px', whiteSpace: 'nowrap' }}>
-                ⚙️ 설정에서 관심 종목을 먼저 등록해주세요.
-              </span>
+              <span style={{ color: '#888', fontSize: '0.85rem', padding: '8px 5px' }}>⚙️ 설정에서 관심 종목을 먼저 등록해주세요.</span>
             )}
           </div>
 
-          <div style={{ flex: 1, padding: '15px', overflowY: 'auto' }}>
+          {/* ── ✅ 스크롤 컨테이너 (이 div가 스크롤 감지 대상) ── */}
+          <div
+            ref={scrollContainerRef}
+            style={{ flex: 1, padding: '15px', overflowY: 'auto' }}
+          >
             
+            {/* 갱신 시간 + 새로고침 */}
+            {(homeMode === 'news' || (homeMode === 'stock' && activeStock)) && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <span style={{ fontSize: '0.75rem', color: '#aaa' }}>
+                  {lastUpdated ? `🕐 ${formatLastUpdated(lastUpdated)} 갱신` : ''}
+                </span>
+                <button onClick={() => homeMode === 'news' ? fetchNews(false) : fetchStockData(false)}
+                  style={{ fontSize: '0.75rem', padding: '4px 10px', backgroundColor: '#f1f3f4', border: '1px solid #ddd', borderRadius: '12px', cursor: 'pointer', color: '#5f6368' }}>
+                  🔄 새로고침
+                </button>
+              </div>
+            )}
+
             {/* 검색 결과 배너 */}
             {homeMode === 'news' && searchKeyword && (
               <div style={{ padding: '15px', marginBottom: '15px', backgroundColor: '#e8f0fe', color: '#1a73e8', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderRadius: '12px' }}>
                 <span>🔍 '{searchKeyword}' 검색 결과</span>
-                <button 
-                  onClick={() => { setSearchKeyword(""); setActiveTab('01'); window.history.pushState({}, '', '/'); }} 
-                  style={{ padding: '5px 15px', backgroundColor: 'white', border: '1px solid #1a73e8', color: '#1a73e8', borderRadius: '15px', cursor: 'pointer' }}
-                >
+                <button onClick={() => { setSearchKeyword(""); setActiveTab('01'); window.history.pushState({}, '', '/'); }} 
+                  style={{ padding: '5px 15px', backgroundColor: 'white', border: '1px solid #1a73e8', color: '#1a73e8', borderRadius: '15px', cursor: 'pointer' }}>
                   초기화
                 </button>
               </div>
@@ -278,10 +372,7 @@ export default function App() {
                     <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#202124', marginBottom: '5px' }}>
                       {stockDetail.price?.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
                     </div>
-                    <div style={{ 
-                      fontSize: '1.1rem', fontWeight: 'bold', 
-                      color: stockDetail.diff > 0 ? '#d93025' : stockDetail.diff < 0 ? '#1a73e8' : '#5f6368' 
-                    }}>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: stockDetail.diff > 0 ? '#d93025' : stockDetail.diff < 0 ? '#1a73e8' : '#5f6368' }}>
                       {stockDetail.diff > 0 ? '▲' : stockDetail.diff < 0 ? '▼' : '-'}{' '}
                       {Math.abs(stockDetail.diff)?.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}{' '}
                       ({stockDetail.diff > 0 ? '+' : ''}{stockDetail.diff_percent}%)
@@ -293,19 +384,15 @@ export default function App() {
               </div>
             )}
 
-            {/* 주식 탭 & 종목 미선택 안내 */}
             {homeMode === 'stock' && !activeStock && favoriteStocks.length > 0 && (
-              <div style={{ textAlign: 'center', padding: '40px 20px', color: '#888' }}>
-                위에서 종목을 선택해주세요.
-              </div>
+              <div style={{ textAlign: 'center', padding: '40px 20px', color: '#888' }}>위에서 종목을 선택해주세요.</div>
             )}
 
-            {/* 로딩 */}
+            {/* 초기 로딩 */}
             {isLoading ? (
               <div style={{ textAlign: 'center', padding: '50px', color: '#888' }}>로딩 중...</div>
             ) : (
               <>
-                {/* 주식 관련 뉴스 헤더 */}
                 {homeMode === 'stock' && newsList.length > 0 && (
                   <h3 style={{ fontSize: '1rem', color: '#137333', marginBottom: '12px', marginTop: 0 }}>
                     📰 {activeStock?.name} 관련 최신 뉴스
@@ -313,20 +400,16 @@ export default function App() {
                 )}
 
                 {/* 뉴스 카드 목록 */}
-                {newsList.slice(0, displayCount).map((news) => (
-                  <div 
-                    key={news.id} 
-                    onClick={() => openNewsLink(news.url)} 
+                {newsList.map((news) => (
+                  <div key={news.id} onClick={() => openNewsLink(news.url)} 
                     style={{ backgroundColor: 'white', padding: '15px', borderRadius: '12px', marginBottom: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.08)', cursor: 'pointer', transition: 'box-shadow 0.2s' }}
                     onMouseEnter={e => e.currentTarget.style.boxShadow = '0 3px 8px rgba(0,0,0,0.15)'}
-                    onMouseLeave={e => e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.08)'}
-                  >
+                    onMouseLeave={e => e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.08)'}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                       <span style={{ fontSize: '0.75rem', color: homeMode === 'stock' ? '#137333' : '#1a73e8', fontWeight: 'bold' }}>
-                        {homeMode === 'stock' 
+                        {homeMode === 'stock'
                           ? (ALL_CATEGORIES.find(c => c.id === news.category_code)?.name || '관련뉴스')
-                          : ALL_CATEGORIES.find(c => c.id === news.category_code)?.name
-                        }
+                          : ALL_CATEGORIES.find(c => c.id === news.category_code)?.name}
                       </span>
                       <span style={{ fontSize: '0.75rem', color: '#999' }}>{news.created_at}</span>
                     </div>
@@ -336,34 +419,26 @@ export default function App() {
                     </p>
                   </div>
                 ))}
-                
-                {/* 더 보기 버튼 */}
-                {displayCount < newsList.length && (
-                  <button 
-                    onClick={() => setDisplayCount(prev => prev + 10)} 
-                    style={{ 
-                      width: '100%', padding: '12px', marginTop: '5px', marginBottom: '30px',
-                      backgroundColor: homeMode === 'stock' ? '#e6f4ea' : '#e8f0fe', 
-                      color: homeMode === 'stock' ? '#137333' : '#1a73e8', 
-                      border: 'none', borderRadius: '25px', cursor: 'pointer', fontWeight: 'bold'
-                    }}
-                  >
-                    🔽 이전 뉴스 더 보기 ({newsList.length - displayCount}개 남음)
-                  </button>
+
+                {/* ✅ 추가 로딩 스피너 */}
+                {isLoadingMore && (
+                  <div style={{ textAlign: 'center', padding: '20px', color: '#aaa', fontSize: '0.85rem' }}>
+                    ⏳ 뉴스 더 불러오는 중...
+                  </div>
                 )}
 
-                {/* 주식 탭: 관련 뉴스 없음 */}
+                {/* ✅ 더 이상 없을 때 */}
+                {!hasMore && newsList.length > 0 && !isLoadingMore && (
+                  <div style={{ textAlign: 'center', padding: '20px', color: '#ccc', fontSize: '0.8rem' }}>
+                    ── 모든 뉴스를 불러왔습니다 ──
+                  </div>
+                )}
+
                 {homeMode === 'stock' && activeStock && newsList.length === 0 && !isLoading && (
-                  <div style={{ textAlign: 'center', padding: '30px', color: '#888' }}>
-                    해당 종목과 관련된 최근 뉴스가 없습니다.
-                  </div>
+                  <div style={{ textAlign: 'center', padding: '30px', color: '#888' }}>해당 종목과 관련된 최근 뉴스가 없습니다.</div>
                 )}
-
-                {/* 뉴스 탭: 뉴스 없음 */}
                 {homeMode === 'news' && newsList.length === 0 && !isLoading && (
-                  <div style={{ textAlign: 'center', padding: '30px', color: '#888' }}>
-                    뉴스가 없습니다.
-                  </div>
+                  <div style={{ textAlign: 'center', padding: '30px', color: '#888' }}>뉴스가 없습니다.</div>
                 )}
               </>
             )}
@@ -405,28 +480,16 @@ export default function App() {
 
           <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '15px', boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
             <h2 style={{ margin: '0 0 20px 0', fontSize: '1.2rem', color: '#34a853' }}>📈 관심 주식 종목 관리</h2>
-            
             <div style={{ marginBottom: '15px' }}>
               <div style={{ display: 'flex', gap: '8px' }}>
-                <input 
-                  type="text" 
-                  placeholder="종목명 입력 (예: 삼성전자, 애플)" 
-                  value={newStockName} 
-                  onChange={e => handleSearchChange(e.target.value)} 
-                  onKeyDown={e => e.key === 'Enter' && handleAddStock()} 
-                  style={{ flex: 1, padding: '10px', borderRadius: '6px', border: '1px solid #ddd' }} 
-                />
+                <input type="text" placeholder="종목명 입력 (예: 삼성전자, 애플)" value={newStockName} onChange={e => handleSearchChange(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleAddStock()} style={{ flex: 1, padding: '10px', borderRadius: '6px', border: '1px solid #ddd' }} />
                 <button id="addStockBtn" onClick={() => handleAddStock(newStockName)} style={{ padding: '0 15px', backgroundColor: '#34a853', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>추가</button>
               </div>
-              
               {searchResults.length > 0 && (
                 <ul style={{ backgroundColor: 'white', border: '1px solid #ddd', borderRadius: '6px', marginTop: '4px', padding: 0, listStyle: 'none', maxHeight: '150px', overflowY: 'auto', boxShadow: '0 4px 6px rgba(0,0,0,0.1)' }}>
                   {searchResults.map((stock, idx) => (
-                    <li 
-                      key={idx} 
-                      onClick={() => handleSelectAndAdd(stock.name, stock.ticker)}
-                      style={{ padding: '10px 15px', borderBottom: '1px solid #eee', cursor: 'pointer', fontSize: '0.9rem', color: '#333' }}
-                    >
+                    <li key={idx} onClick={() => handleSelectAndAdd(stock.name, stock.ticker)}
+                      style={{ padding: '10px 15px', borderBottom: '1px solid #eee', cursor: 'pointer', fontSize: '0.9rem', color: '#333' }}>
                       <span style={{ fontWeight: 'bold', color: '#1a73e8' }}>{stock.name}</span>{' '}
                       <span style={{ fontSize: '0.8rem', color: '#888' }}>({stock.ticker})</span>
                     </li>
@@ -434,14 +497,10 @@ export default function App() {
                 </ul>
               )}
             </div>
-
             <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
               {favoriteStocks.map(stock => (
                 <li key={stock.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px', borderBottom: '1px solid #eee' }}>
-                  <span>
-                    <strong>{stock.name}</strong>{' '}
-                    <span style={{ color: '#888', fontSize: '0.85rem' }}>({stock.ticker})</span>
-                  </span>
+                  <span><strong>{stock.name}</strong>{' '}<span style={{ color: '#888', fontSize: '0.85rem' }}>({stock.ticker})</span></span>
                   <button onClick={() => handleDeleteStock(stock.id)} style={{ color: '#ea4335', background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.9rem' }}>✖ 삭제</button>
                 </li>
               ))}
@@ -454,7 +513,7 @@ export default function App() {
       )}
 
       {/* ── 하단 네비게이션 ── */}
-      <div style={{ display: 'flex', borderTop: '1px solid #ddd', backgroundColor: 'white', position: 'sticky', bottom: 0, padding: '5px 0' }}>
+      <div style={{ display: 'flex', borderTop: '1px solid #ddd', backgroundColor: 'white', position: 'sticky', bottom: 0, padding: '5px 0', flexShrink: 0 }}>
         <div onClick={() => setCurrentMenu('home')} style={{ flex: 1, textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', color: currentMenu === 'home' ? '#1a73e8' : '#9aa0a6', cursor: 'pointer' }}>
           <span style={{ fontSize: '20px' }}>🏠</span>
           <span style={{ fontSize: '11px', fontWeight: currentMenu === 'home' ? 'bold' : 'normal' }}>홈</span>

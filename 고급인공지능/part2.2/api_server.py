@@ -32,7 +32,13 @@ class ClipboardItem(BaseModel):
     content: str
 
 def get_db_connection():
-    conn = sqlite3.connect('news.db')
+    # 1. timeout=30 추가: DB가 잠겨있을 때 30초까지 기다리도록 설정
+    # 2. check_same_thread=False 추가: 멀티스레딩 환경에서 안전하게 접속
+    conn = sqlite3.connect('news.db', timeout=30, check_same_thread=False)
+    
+    # 3. WAL 모드 활성화: 읽기/쓰기를 동시에 처리할 수 있게 해줌 (이게 핵심!)
+    conn.execute("PRAGMA journal_mode=WAL")
+    
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -143,15 +149,30 @@ async def update_settings(request: Request):
         json.dump(current_settings, f)
     return {"status": "success"}
 
+# ✅ [수정] limit/offset 파라미터 추가 — 무한 스크롤 지원
+@app.get("/api/news")
+def get_all_news(limit: int = 10, offset: int = 0):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, category_code, title, url, ai_summary, created_at FROM news "
+        "ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        (limit, offset)
+    )
+    data = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return {"status": "success", "data": data}
+
+# ✅ [수정] limit/offset 파라미터 추가 — 무한 스크롤 지원
 @app.get("/api/news/{category_code}")
-def get_news(category_code: str):
+def get_news(category_code: str, limit: int = 10, offset: int = 0):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
         cursor.execute(
             "SELECT id, category_code, title, url, ai_summary, created_at FROM news "
-            "WHERE category_code = ? ORDER BY created_at DESC LIMIT 10",
-            (category_code,)
+            "WHERE category_code = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (category_code, limit, offset)
         )
         return {"status": "success", "data": [dict(row) for row in cursor.fetchall()]}
     except Exception as e:
@@ -159,10 +180,9 @@ def get_news(category_code: str):
     finally:
         conn.close()
 
-# ✅ /api/search 통합 — q= (웹) 또는 keyword= (트레이앱) 둘 다 지원
+# ✅ [수정] limit/offset 파라미터 추가 — q= (웹) 또는 keyword= (트레이앱) 둘 다 지원
 @app.get("/api/search")
-def search_news(q: str = "", keyword: str = ""):
-    # q= 파라미터 우선, 없으면 keyword= 사용
+def search_news(q: str = "", keyword: str = "", limit: int = 10, offset: int = 0):
     search_term = q or keyword
     if not search_term:
         return {"status": "error", "message": "검색어를 입력하세요"}
@@ -172,8 +192,8 @@ def search_news(q: str = "", keyword: str = ""):
         term = f"%{search_term}%"
         cursor.execute(
             "SELECT id, category_code, title, url, ai_summary, created_at FROM news "
-            "WHERE title LIKE ? OR ai_summary LIKE ? ORDER BY created_at DESC LIMIT 50",
-            (term, term)
+            "WHERE title LIKE ? OR ai_summary LIKE ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (term, term, limit, offset)
         )
         return {"status": "success", "data": [dict(row) for row in cursor.fetchall()]}
     except Exception as e:
