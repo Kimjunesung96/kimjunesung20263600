@@ -1,0 +1,879 @@
+
+
+============================================================
+[26-05-31 21:32] news-app\src\components\NewsTab.jsx (143줄)
+============================================================
+
+import { useRef, useEffect } from 'react';
+import { useNewsData } from '../hooks/useNewsData';
+
+const ALL_CATEGORIES = [
+  { id: '01', name: 'IT/테크' }, { id: '02', name: '경제' },
+  { id: '03', name: '사회' },   { id: '04', name: '세계' },
+  { id: '05', name: '연예' },   { id: '06', name: '스포츠' },
+  { id: '07', name: '과학' },   { id: '08', name: '건강' },
+];
+
+export default function NewsTab({
+  activeTab, setActiveTab,
+  searchKeyword, setSearchKeyword,
+  enabledCategories,
+  alarmInterval,
+  currentMenu,
+}) {
+  const scrollContainerRef = useRef(null);
+
+  const {
+    newsList,
+    isLoading,
+    isLoadingMore,
+    hasMore,
+    lastUpdated,
+    fetchNews,
+    fetchMoreNews,
+  } = useNewsData({
+    activeTab,
+    searchKeyword,
+    homeMode: 'news',
+    currentMenu,
+    alarmInterval,
+  });
+
+  // 스크롤 바닥 감지 → 추가 로드
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const handleScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = el;
+      if (scrollHeight - scrollTop - clientHeight < 150) fetchMoreNews();
+    };
+    el.addEventListener('scroll', handleScroll);
+    return () => el.removeEventListener('scroll', handleScroll);
+  }, [fetchMoreNews]);
+
+  const formatLastUpdated = (date) => {
+    if (!date) return null;
+    return date.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  };
+
+  const openNewsLink = (url) => window.open(url, '_blank');
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+
+      {/* 카테고리 버튼 바 */}
+      <div style={{ display: 'flex', overflowX: 'auto', padding: '10px', gap: '8px', backgroundColor: 'white', whiteSpace: 'nowrap', borderBottom: '1px solid #ddd', flexShrink: 0 }}>
+        {ALL_CATEGORIES
+          .filter(cat => enabledCategories.includes(cat.id))
+          .map(cat => (
+            <button key={cat.id}
+              onClick={() => { setSearchKeyword(''); setActiveTab(cat.id); window.history.pushState({}, '', '/'); }}
+              style={{ padding: '8px 16px', borderRadius: '20px', border: 'none', backgroundColor: activeTab === cat.id && !searchKeyword ? '#1a73e8' : '#f1f3f4', color: activeTab === cat.id && !searchKeyword ? 'white' : '#5f6368', fontWeight: 'bold', cursor: 'pointer', transition: 'all 0.2s', flexShrink: 0 }}>
+              {cat.name}
+            </button>
+          ))
+        }
+      </div>
+
+      {/* 스크롤 컨테이너 */}
+      <div ref={scrollContainerRef} style={{ flex: 1, padding: '15px', overflowY: 'auto' }}>
+
+        {/* 갱신 시간 + 새로고침 */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+          <span style={{ fontSize: '0.75rem', color: '#aaa' }}>
+            {lastUpdated ? `🕐 ${formatLastUpdated(lastUpdated)} 갱신` : ''}
+          </span>
+          <button onClick={() => fetchNews(false)}
+            style={{ fontSize: '0.75rem', padding: '4px 10px', backgroundColor: '#f1f3f4', border: '1px solid #ddd', borderRadius: '12px', cursor: 'pointer', color: '#5f6368' }}>
+            🔄 새로고침
+          </button>
+        </div>
+
+        {/* 검색 결과 배너 */}
+        {searchKeyword && (
+          <div style={{ padding: '15px', marginBottom: '15px', backgroundColor: '#e8f0fe', color: '#1a73e8', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderRadius: '12px' }}>
+            <span>🔍 '{searchKeyword}' 검색 결과</span>
+            <button onClick={() => { setSearchKeyword(''); setActiveTab('01'); window.history.pushState({}, '', '/'); }}
+              style={{ padding: '5px 15px', backgroundColor: 'white', border: '1px solid #1a73e8', color: '#1a73e8', borderRadius: '15px', cursor: 'pointer' }}>
+              초기화
+            </button>
+          </div>
+        )}
+
+        {/* 로딩 */}
+        {isLoading ? (
+          <div style={{ textAlign: 'center', padding: '50px', color: '#888' }}>로딩 중...</div>
+        ) : (
+          <>
+            {/* 뉴스 카드 목록 */}
+            {newsList.map((news) => (
+              <div key={news.id} onClick={() => openNewsLink(news.url)}
+                style={{ backgroundColor: 'white', padding: '15px', borderRadius: '12px', marginBottom: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.08)', cursor: 'pointer', transition: 'box-shadow 0.2s' }}
+                onMouseEnter={e => e.currentTarget.style.boxShadow = '0 3px 8px rgba(0,0,0,0.15)'}
+                onMouseLeave={e => e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.08)'}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <span style={{ fontSize: '0.75rem', color: '#1a73e8', fontWeight: 'bold' }}>
+                    {ALL_CATEGORIES.find(c => c.id === news.category_code)?.name}
+                  </span>
+                  <span style={{ fontSize: '0.75rem', color: '#999' }}>{news.created_at}</span>
+                </div>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '1rem', color: '#202124', lineHeight: '1.4' }}>{news.title}</h3>
+                <p style={{ margin: 0, fontSize: '0.875rem', color: '#5f6368', display: '-webkit-box', WebkitLineClamp: '2', WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                  {news.ai_summary}
+                </p>
+              </div>
+            ))}
+
+            {/* 추가 로딩 스피너 */}
+            {isLoadingMore && (
+              <div style={{ textAlign: 'center', padding: '20px', color: '#aaa', fontSize: '0.85rem' }}>
+                ⏳ 뉴스 더 불러오는 중...
+              </div>
+            )}
+
+            {/* 끝 표시 */}
+            {!hasMore && newsList.length > 0 && !isLoadingMore && (
+              <div style={{ textAlign: 'center', padding: '20px', color: '#ccc', fontSize: '0.8rem' }}>
+                ── 모든 뉴스를 불러왔습니다 ──
+              </div>
+            )}
+
+            {newsList.length === 0 && !isLoading && (
+              <div style={{ textAlign: 'center', padding: '30px', color: '#888' }}>뉴스가 없습니다.</div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+============================================================
+[26-05-24 16:26] main_engine.py (108줄)
+============================================================
+
+import schedule
+import time
+import requests
+import datetime
+import sqlite3
+import xml.etree.ElementTree as ET
+import re
+import email.utils
+from datetime import datetime as dt, timedelta, timezone
+
+KST = timezone(timedelta(hours=9))
+
+def get_db_connection():
+    conn = sqlite3.connect('news.db')
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS news (
+            id TEXT PRIMARY KEY,
+            category_code TEXT,
+            title TEXT,
+            url TEXT UNIQUE,
+            ai_summary TEXT,
+            created_at TEXT
+        )
+    ''')
+    return conn
+
+def clean_html(raw_html):
+    cleanr = re.compile('<.*?>')
+    return re.sub(cleanr, '', raw_html).strip()
+
+def parse_rss_date(date_str):
+    try:
+        dt_obj = email.utils.parsedate_to_datetime(date_str)
+        return dt_obj.astimezone(KST).strftime('%Y-%m-%d %H:%M:%S')
+    except:
+        return datetime.datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')
+
+def fetch_all_categories():
+    print(f"\n[{datetime.datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')}] 📡 뉴스 수집 시작...")
+    
+    RSS_URLS = {
+        "01": "https://news.google.com/rss/headlines/section/topic/TECHNOLOGY?hl=ko&gl=KR&ceid=KR:ko",
+        "02": "https://news.google.com/rss/headlines/section/topic/BUSINESS?hl=ko&gl=KR&ceid=KR:ko",
+        "03": "https://news.google.com/rss/headlines/section/topic/NATION?hl=ko&gl=KR&ceid=KR:ko",
+        "04": "https://news.google.com/rss/headlines/section/topic/WORLD?hl=ko&gl=KR&ceid=KR:ko",
+        "05": "https://news.google.com/rss/headlines/section/topic/ENTERTAINMENT?hl=ko&gl=KR&ceid=KR:ko",
+        "06": "https://news.google.com/rss/headlines/section/topic/SPORTS?hl=ko&gl=KR&ceid=KR:ko",
+        "07": "https://news.google.com/rss/headlines/section/topic/SCIENCE?hl=ko&gl=KR&ceid=KR:ko",
+        "08": "https://news.google.com/rss/headlines/section/topic/HEALTH?hl=ko&gl=KR&ceid=KR:ko"
+    }
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # ✅ 기존 DB에 url UNIQUE 제약이 없을 경우를 대비해 인덱스로 추가
+    try:
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_news_url ON news(url)")
+    except Exception:
+        pass
+    
+    try:
+        # 💡 [추가] 구글 서버가 봇으로 인식해 연결을 끊는 것을 방지하기 위한 신분증(User-Agent)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        for cat_code, url in RSS_URLS.items():
+            print(f"[{cat_code}] 카테고리 수집 중...")
+            response = requests.get(url, headers=headers) # 🚨 [변경] 요청 시 신분증 제시
+            root = ET.fromstring(response.text)
+            items = root.findall('.//item')[:10]
+            
+            sequence = 1
+            for item in items:
+                title = item.find('title').text
+                link = item.find('link').text
+                raw_desc = item.find('description').text
+                pub_date_str = item.find('pubDate').text
+                
+                ai_summary = clean_html(raw_desc) if raw_desc else "요약 없음"
+                formatted_created_at = parse_rss_date(pub_date_str)
+
+                # ✅ url 기준 중복 방지 — 같은 기사가 몇 번이든 다시 들어오지 않음
+                sql = """
+                INSERT OR IGNORE INTO news (id, category_code, title, url, ai_summary, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """
+                # id는 url을 해시해서 고유하게 생성
+                import hashlib
+                news_id = hashlib.md5(link.encode()).hexdigest()[:16]
+                cursor.execute(sql, (news_id, cat_code, title, link, ai_summary, formatted_created_at))
+                sequence += 1
+                
+        conn.commit()
+        print("✅ 수집 완료!")
+        
+    except Exception as e:
+        print(f"❌ 수집 에러 발생: {e}")
+    finally:
+        conn.close()
+
+schedule.every(10).minutes.do(fetch_all_categories)
+
+if __name__ == "__main__":
+    fetch_all_categories()
+    
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
+============================================================
+[26-05-23 21:13] news-app\rebuild_news.bat (23줄)
+============================================================
+
+@echo off
+chcp 65001 > nul
+cd /d "%~dp0"
+
+echo 🧹 [1단계] 기존 dist 폴더 삭제 중...
+cd news-app
+
+:: dist 폴더가 있으면 강제 삭제 (s:하위폴더포함, q:묻지않음)
+if exist dist (
+    rmdir /s /q dist
+    echo ✅ dist 폴더가 삭제되었습니다.
+) else (
+    echo ⚠️ dist 폴더가 없어서 바로 빌드로 넘어갑니다.
+)
+
+echo 📦 [2단계] npm run build 실행 중...
+call npm run build
+
+echo.
+echo ========================================================
+echo ✅ 빌드가 완료되었습니다.
+echo ========================================================
+pause
+
+============================================================
+[26-05-23 17:25] gitUpload.py (44줄)
+============================================================
+
+import os
+import subprocess
+import shutil
+
+# 1. 설정 정보
+REPO_URL = "https://github.com/Kimjunesung96/kimjunesung20263600.git"
+TARGET_DIR = r"C:\Users\skrkt\Desktop\고급인공지능\part2"
+NODE_MODULES = os.path.join(TARGET_DIR, "news-app", "node_modules")
+
+def run_git(commands):
+    for cmd in commands:
+        print(f"Executing: {cmd}")
+        subprocess.run(cmd, shell=True, cwd=TARGET_DIR)
+
+def main():
+    # 💡 .gitignore 파일이 없다면 node_modules를 제외하도록 생성
+    gitignore_path = os.path.join(TARGET_DIR, ".gitignore")
+    if not os.path.exists(gitignore_path):
+        with open(gitignore_path, "w") as f:
+            f.write("news-app/node_modules/\n.git/\n")
+
+    print("🚀 깃허브 강제 업로드 시작...")
+
+    # 💡 Git 명령어 세트
+    commands = [
+        "git init",
+        f"git remote remove origin", # 기존 연결 제거 (혹시 모르니)
+        f"git remote add origin {REPO_URL}",
+        "git add .",
+        'git commit -m "Automated update from Python script"',
+        "git branch -M main",
+        "git push -u origin main --force" # 💡 강제로 덮어씌우기
+    ]
+
+    try:
+        run_git(commands)
+        print("\n✅ 업로드 완료! 이제 깃허브를 확인해보세요.")
+    except Exception as e:
+        print(f"\n❌ 에러 발생: {e}")
+
+    os.system("pause")
+
+if __name__ == "__main__":
+    main()
+
+============================================================
+[26-05-23 13:40] vision_test.py (96줄)
+============================================================
+
+import tkinter as tk
+import time
+import asyncio
+import ctypes
+import mss  # 💡 새로운 초고속 캡처 엔진!
+from winrt.windows.media.ocr import OcrEngine
+from winrt.windows.graphics.imaging import BitmapPixelFormat, SoftwareBitmap
+from winrt.windows.globalization import Language
+from winrt.windows.storage.streams import DataWriter
+
+# 💡 [핵심 최적화] 파이썬과 윈도우의 해상도 눈높이를 물리 픽셀(1:1)로 강제 고정!
+try:
+    ctypes.windll.user32.SetProcessDPIAware()
+except:
+    pass
+
+# 기존 빨간 박스 그리는 함수 (이건 완벽해서 변경 없이 그대로 씁니다)
+def draw_red_box(x, y, w, h):
+    box_win = tk.Tk()
+    box_win.overrideredirect(True)
+    box_win.attributes("-topmost", True)
+    box_win.attributes("-transparentcolor", "white") 
+    
+    pad = 5
+    box_win.geometry(f"{w + pad*2}x{h + pad*2}+{x - pad}+{y - pad}")
+    
+    canvas = tk.Canvas(box_win, bg="white", highlightthickness=0)
+    canvas.pack(fill="both", expand=True)
+    
+    def blink(is_visible):
+        canvas.delete("all")
+        if is_visible:
+            canvas.create_rectangle(pad, pad, w + pad, h + pad, outline="red", width=4)
+        box_win.after(400, blink, not is_visible)
+        
+    blink(True)
+    box_win.bind("<Button-1>", lambda e: box_win.destroy())
+    canvas.bind("<Button-1>", lambda e: box_win.destroy())
+    box_win.mainloop()
+
+async def main():
+    target_word = "시이이이작" 
+    print(f"⚡ WinRT OCR 모드 가동: 화면에서 '{target_word}' 글씨를 읽어냅니다...")
+    
+    start_time = time.time()
+    
+    # 1. 💡 화면 캡처: ImageGrab 버리고 초고속 mss로 갈아탑니다!
+    with mss.mss() as sct:
+        monitor = sct.monitors[1]  # 주 모니터 캡처
+        sct_img = sct.grab(monitor)
+        width, height = sct_img.width, sct_img.height
+        raw_bytes = sct_img.bgra  # 캡처된 생고기 데이터(바이트)
+        
+    # 2. 💡 WinRT가 좋아하는 포맷으로 데이터 번역 (DataWriter 활용)
+    writer = DataWriter()
+    writer.write_bytes(bytearray(raw_bytes)) # 파이썬 바이트를 윈도우 바이트로 변환
+    buffer = writer.detach_buffer()
+    
+    # WinRT 전용 비트맵(SoftwareBitmap) 생성
+    software_bitmap = SoftwareBitmap.create_copy_from_buffer(buffer, BitmapPixelFormat.BGRA8, width, height)
+    
+    # 3. 💡 OCR 엔진 초기화 및 인식 (한국어 모드)
+    lang = Language("ko-KR")
+    engine = OcrEngine.try_create_from_language(lang)
+    
+    # 윈도우 엔진아, 글씨 좀 읽어와라!
+    result = await engine.recognize_async(software_bitmap)
+    
+    ocr_end_time = time.time()
+    print(f"🏎️ 캡처 및 글자 판독 완료: {ocr_end_time - start_time:.3f}초")
+    
+    # 4. 💡 찾은 글자 좌표 스캔
+    found = False
+    for line in result.lines:
+        if target_word in line.text:
+            print(f"✅ 발견된 문장: '{line.text}'")
+            
+            # 문장 안에서 정확한 단어의 위치만 콕 집어내기
+            for word in line.words:
+                if target_word in word.text:
+                    x = int(word.bounding_rect.x)
+                    y = int(word.bounding_rect.y)
+                    w = int(word.bounding_rect.width)
+                    h = int(word.bounding_rect.height)
+                    
+                    print(f"🎯 좌표 적중: x={x}, y={y}, w={w}, h={h}")
+                    draw_red_box(x, y, w, h)
+                    found = True
+                    break
+        if found: break
+            
+    if not found:
+        print(f"❌ 화면에서 '{target_word}'를 찾을 수 없습니다.")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+============================================================
+[26-05-22 03:03] setup\setup.bat (30줄)
+============================================================
+
+@echo off
+chcp 65001 > nul
+cd /d "%~dp0"
+
+echo ========================================================
+echo 📦 [1단계] 윈도우 방해물 제거 및 Node.js(웹 엔진) 설치 중...
+echo ========================================================
+taskkill /F /IM msiexec.exe > nul 2>&1
+winget install OpenJS.NodeJS.LTS --source winget --accept-package-agreements --accept-source-agreements
+
+echo.
+echo ========================================================
+echo 🐍 [2단계] 파이썬 하청업체(부품) 모두 고용 중...
+echo ========================================================
+pip install -r requirements.txt
+
+echo.
+echo ========================================================
+echo ⚛️ [3단계] 리액트 웹 화면 부품 설치 중... (news-app)
+echo ========================================================
+cd news-app
+call npm install
+cd ..
+
+echo.
+echo ========================================================
+echo ✅ 모든 부품(파이썬 + 리액트) 설치가 완벽하게 끝났습니다!
+echo 🚨 이제 이 창을 닫고 'run_all.bat'을 켜주세요.
+echo ========================================================
+pause
+
+============================================================
+[26-05-16 14:29] setup.bat (14줄)
+============================================================
+
+@echo off
+chcp 65001 > nul
+cd /d "%~dp0"
+
+echo ========================================================
+echo [설치] 파이썬 하청업체(부품) 모두 고용 중...
+echo ========================================================
+pip install -r requirements.txt
+
+echo.
+echo ========================================================
+echo 완벽하게 설치가 끝났습니다! 이 창을 닫고 run_all.bat을 켜주세요.
+echo ========================================================
+pause
+
+============================================================
+[26-05-16 14:29] run_all.bat (37줄)
+============================================================
+
+@echo off
+chcp 65001 > nul
+cd /d "%~dp0"
+set PYTHONIOENCODING=utf-8 
+
+:: 8000번 포트 감지
+set "PID="
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr :8000 ^| findstr LISTENING') do set PID=%%a
+
+if not "%PID%"=="" goto TURN_OFF
+
+:TURN_ON
+echo [AI 뉴스 큐레이터 시스템 전체 가동 시작 - NPM 없는 배포 모드]
+start "News_Engine" cmd /k "python main_engine.py"
+start "API_Server" cmd /k "uvicorn api_server:app --reload"
+start "Floating_Bot" cmd /k "python floating_bot.py"
+
+echo 서버 켜는 중... 잠시만 기다려주세요 (3초 대기)
+timeout /t 3 > nul
+
+:: 💡 npm 없이 FastAPI(8000)가 서빙하는 빵(dist) 화면으로 자동 접속!
+start http://localhost:8000
+
+echo 모든 시스템이 켜졌습니다.
+goto :EOF
+
+:TURN_OFF
+echo [시스템 종료 중...]
+taskkill /F /PID %PID% > NUL 2>&1
+taskkill /F /T /FI "WINDOWTITLE eq News_Engine*" > NUL 2>&1
+taskkill /F /T /FI "WINDOWTITLE eq API_Server*" > NUL 2>&1
+taskkill /F /T /FI "WINDOWTITLE eq Floating_Bot*" > NUL 2>&1
+wmic process where "name='python.exe' and commandline like '%%main_engine.py%%'" delete > NUL 2>&1
+wmic process where "name='python.exe' and commandline like '%%floating_bot.py%%'" delete > NUL 2>&1
+echo 모든 프로세스가 정리되었습니다.
+pause
+goto :EOF
+
+============================================================
+[26-05-16 14:29] setup\run_all.bat (37줄)
+============================================================
+
+@echo off
+chcp 65001 > nul
+cd /d "%~dp0"
+set PYTHONIOENCODING=utf-8 
+
+:: 8000번 포트 감지
+set "PID="
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr :8000 ^| findstr LISTENING') do set PID=%%a
+
+if not "%PID%"=="" goto TURN_OFF
+
+:TURN_ON
+echo [AI 뉴스 큐레이터 시스템 전체 가동 시작 - NPM 없는 배포 모드]
+start "News_Engine" cmd /k "python main_engine.py"
+start "API_Server" cmd /k "uvicorn api_server:app --reload"
+start "Floating_Bot" cmd /k "python floating_bot.py"
+
+echo 서버 켜는 중... 잠시만 기다려주세요 (3초 대기)
+timeout /t 3 > nul
+
+:: 💡 npm 없이 FastAPI(8000)가 서빙하는 빵(dist) 화면으로 자동 접속!
+start http://localhost:8000
+
+echo 모든 시스템이 켜졌습니다.
+goto :EOF
+
+:TURN_OFF
+echo [시스템 종료 중...]
+taskkill /F /PID %PID% > NUL 2>&1
+taskkill /F /T /FI "WINDOWTITLE eq News_Engine*" > NUL 2>&1
+taskkill /F /T /FI "WINDOWTITLE eq API_Server*" > NUL 2>&1
+taskkill /F /T /FI "WINDOWTITLE eq Floating_Bot*" > NUL 2>&1
+wmic process where "name='python.exe' and commandline like '%%main_engine.py%%'" delete > NUL 2>&1
+wmic process where "name='python.exe' and commandline like '%%floating_bot.py%%'" delete > NUL 2>&1
+echo 모든 프로세스가 정리되었습니다.
+pause
+goto :EOF
+
+============================================================
+[26-05-14 00:30] news-app\src\Clipboard.jsx (125줄)
+============================================================
+
+import React, { useState, useEffect } from 'react';
+
+export default function Clipboard() {
+  const [items, setItems] = useState([]);
+  const [selectedImage, setSelectedImage] = useState(null); // 💡 크게 볼 이미지 저장
+
+  // 💡 DB에서 클립보드 내역 가져오기
+  const fetchClipboard = () => {
+    fetch('http://localhost:8000/api/clipboard')
+      .then(res => res.json())
+      .then(data => {
+        if(data.status === 'success') setItems(data.data);
+      })
+      .catch(err => console.error("클립보드 불러오기 실패:", err));
+  };
+
+  useEffect(() => {
+    fetchClipboard();
+  }, []);
+
+  // 💡 이미지 삭제 기능
+  const handleDelete = (id) => {
+    if(window.confirm("이 캡처본을 삭제하시겠습니까?")) {
+      fetch(`http://localhost:8000/api/clipboard/${id}`, { method: 'DELETE' })
+        .then(() => fetchClipboard());
+    }
+  };
+
+  // 💡 [핵심] 이미지를 다시 클립보드에 복사하는 기능
+  const copyImageToClipboard = async (base64Data) => {
+    try {
+      const response = await fetch(base64Data);
+      const blob = await response.blob();
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          [blob.type]: blob
+        })
+      ]);
+      alert("✅ 이미지가 클립보드에 복사되었습니다!\n(카톡이나 그림판에 Ctrl+V 해보세요)");
+      setSelectedImage(null); // 복사 후 팝업 닫기
+    } catch (err) {
+      console.error(err);
+      alert("❌ 복사에 실패했습니다.");
+    }
+  };
+
+  return (
+    <div style={{ padding: '20px', backgroundColor: 'white', minHeight: '100vh', position: 'relative' }}>
+      
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+        <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', color: '#1a73e8' }}>📋 클립보드 갤러리</h2>
+        <button onClick={fetchClipboard} style={{ padding: '5px 10px', backgroundColor: '#f1f3f4', border: '1px solid #ddd', borderRadius: '5px', cursor: 'pointer', fontSize: '12px' }}>
+          🔄 새로고침
+        </button>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '15px' }}>
+        
+        {items.length === 0 ? (
+          <p style={{ gridColumn: '1 / -1', textAlign: 'center', color: '#999', marginTop: '50px' }}>저장된 캡처본이 없습니다.</p>
+        ) : (
+          items.map(item => (
+            <div key={item.id} style={{ border: '1px solid #eee', borderRadius: '12px', overflow: 'hidden', position: 'relative', boxShadow: '0 4px 6px rgba(0,0,0,0.05)', backgroundColor: '#f8f9fa' }}>
+              
+              <button 
+                onClick={() => handleDelete(item.id)} 
+                style={{ position: 'absolute', top: '8px', right: '8px', backgroundColor: 'rgba(234, 67, 53, 0.8)', color: 'white', border: 'none', borderRadius: '50%', width: '24px', height: '24px', cursor: 'pointer', zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px' }}
+              >
+                ✖
+              </button>
+
+              {item.type === 'image' && (
+                <img 
+                  src={item.content} 
+                  alt="캡처" 
+                  style={{ width: '100%', height: '150px', objectFit: 'cover', display: 'block', cursor: 'pointer' }} 
+                  onClick={() => setSelectedImage(item.content)} // 💡 누르면 팝업(모달) 띄우기!
+                />
+              )}
+
+              <div style={{ padding: '8px', backgroundColor: 'white', fontSize: '11px', color: '#5f6368', textAlign: 'center', borderTop: '1px solid #eee' }}>
+                {new Date(item.created_at).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              </div>
+              
+            </div>
+          ))
+        )}
+
+      </div>
+
+      {/* 💡 [신규] 이미지를 크게 보여주고 복사하는 팝업(모달) 창 */}
+      {selectedImage && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, 
+          backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 9999,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '20px'
+        }}>
+          {/* 크게 보이는 이미지 */}
+          <img 
+            src={selectedImage} 
+            alt="원본 캡처" 
+            style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain', borderRadius: '8px', boxShadow: '0 10px 25px rgba(0,0,0,0.5)' }} 
+          />
+          
+          {/* 하단 버튼들 */}
+          <div style={{ display: 'flex', gap: '15px', marginTop: '25px' }}>
+            <button 
+              onClick={() => copyImageToClipboard(selectedImage)}
+              style={{ padding: '12px 24px', backgroundColor: '#1a73e8', color: 'white', border: 'none', borderRadius: '30px', fontSize: '16px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', boxShadow: '0 4px 6px rgba(0,0,0,0.2)' }}
+            >
+              📋 복사하기
+            </button>
+            <button 
+              onClick={() => setSelectedImage(null)}
+              style={{ padding: '12px 24px', backgroundColor: '#5f6368', color: 'white', border: 'none', borderRadius: '30px', fontSize: '16px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', boxShadow: '0 4px 6px rgba(0,0,0,0.2)' }}
+            >
+              ✖ 닫기
+            </button>
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+}
+
+============================================================
+[26-05-12 17:47] 요약.py (90줄)
+============================================================
+
+import os
+import datetime
+
+def gather_files():
+    # 🔍 수집할 핵심 파일 확장자
+    target_extensions = ('.py', '.jsx', '.html', '.bat')
+    ignore_folders = {'node_modules', '.git', '__pycache__', 'dist', 'build', '.vscode'}
+    
+    # 💡 한 텍스트 파일당 최대 몇 줄까지 담을지 설정 (원하시면 숫자를 수정하세요!)
+    MAX_LINES_PER_FILE = 1000 
+    
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    files_data = []
+    
+    print("📦 파일 스캔 및 내용 수집 중...")
+    
+    for root, dirs, files in os.walk(base_dir):
+        dirs[:] = [d for d in dirs if d not in ignore_folders]
+        
+        for file in files:
+            if file.endswith(target_extensions):
+                # 💡 만들어진 결과물(코드모음_*.txt)이 다시 스캔되는 것을 방지
+                if file.startswith("코드모음_"):
+                    continue
+                    
+                filepath = os.path.join(root, file)
+                
+                try:
+                    mtime = os.path.getmtime(filepath)
+                    dt = datetime.datetime.fromtimestamp(mtime).strftime('%y-%m-%d %H:%M')
+                    
+                    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                        lines = f.readlines()
+                        content = "".join(lines)
+                        line_count = len(lines) # 글자 수가 아닌 '줄 수' 계산!
+                    
+                    files_data.append({
+                        'path': os.path.relpath(filepath, base_dir),
+                        'time': dt,
+                        'line_count': line_count,
+                        'mtime': mtime,
+                        'content': content
+                    })
+                    
+                except Exception as e:
+                    pass 
+
+    # 최근 수정된 순서대로 정렬
+    files_data.sort(key=lambda x: x['mtime'], reverse=True)
+    
+    if not files_data:
+        print("❌ 수집할 파일이 없습니다.")
+        return
+
+    # ---------------------------------------------------------
+    # 💡 수집된 내용들을 여러 개의 텍스트 파일로 쪼개서 저장하기
+    # ---------------------------------------------------------
+    current_part = 1
+    current_lines = 0
+    out_f = open(os.path.join(base_dir, f"코드모음_part{current_part}.txt"), "w", encoding="utf-8")
+    
+    for f_data in files_data:
+        # 파일별 제목 헤더 (예: [26-05-12 16:44] main.py (50줄))
+        header = f"\n\n{'='*60}\n[{f_data['time']}] {f_data['path']} ({f_data['line_count']}줄)\n{'='*60}\n\n"
+        
+        # 파일 하나를 추가할 때 예상되는 줄 수
+        added_lines = f_data['line_count'] + 6 
+        
+        # 만약 이 파일을 넣었을 때 제한(MAX_LINES_PER_FILE)을 넘는다면 새 파일 만들기
+        # 단, current_lines가 0일 때는 파일 하나가 1000줄이 넘더라도 일단 무조건 넣습니다.
+        if current_lines + added_lines > MAX_LINES_PER_FILE and current_lines > 0:
+            out_f.close()
+            current_part += 1
+            out_f = open(os.path.join(base_dir, f"코드모음_part{current_part}.txt"), "w", encoding="utf-8")
+            current_lines = 0
+            
+        out_f.write(header)
+        out_f.write(f_data['content'])
+        current_lines += added_lines
+
+    out_f.close()
+    
+    print("=" * 60)
+    print(f"✅ 총 {len(files_data)}개의 파일 코드를 성공적으로 수집했습니다!")
+    print(f"📁 '코드모음_part1.txt' ~ '코드모음_part{current_part}.txt' 에 나뉘어 저장되었습니다.")
+    print("=" * 60)
+
+if __name__ == "__main__":
+    gather_files()
+    input("\n엔터를 누르면 종료됩니다...")
+
+============================================================
+[26-05-12 02:37] changeAmsi.py (37줄)
+============================================================
+
+import os
+import glob
+
+def convert_bat_to_ansi():
+    # 1. 현재 폴더의 모든 .bat 파일 목록 가져오기
+    bat_files = glob.glob("*.bat")
+    
+    if not bat_files:
+        print("현재 폴더에 .bat 파일이 없습니다.")
+        return
+
+    print(f"--- 배치 파일 ANSI 변환 시작 (대상: {len(bat_files)}개) ---")
+
+    for file_path in bat_files:
+        try:
+            # 2. 먼저 UTF-8로 읽어오기
+            with open(file_path, 'r', encoding='utf-8-sig') as f:
+                content = f.read()
+
+            # 💡 핵심: CP949로 바꿀 수 없는 문자(이모지 등)는 무시하고 지워버리기
+            clean_content = content.encode('cp949', errors='ignore').decode('cp949')
+
+            # 3. 깨끗해진 내용을 ANSI(cp949)로 다시 저장
+            with open(file_path, 'w', encoding='cp949') as f:
+                f.write(clean_content)
+            
+            print(f"✅ 변환 완료: {file_path} (호환 안 되는 이모지 자동 제거됨)")
+
+        except UnicodeDecodeError:
+            print(f"⏩ 건너뜀: {file_path} (이미 ANSI이거나 인코딩이 다릅니다.)")
+        except Exception as e:
+            print(f"❌ 에러 발생 ({file_path}): {str(e)}")
+
+    print("\n--- 모든 작업이 완료되었습니다! ---")
+
+if __name__ == "__main__":
+    convert_bat_to_ansi()
+
+============================================================
+[26-05-04 16:55] news-app\index.html (13줄)
+============================================================
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>news-app</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
+
+
+============================================================
+[26-05-04 16:55] news-app\src\main.jsx (10줄)
+============================================================
+
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import './index.css'
+import App from './App.jsx'
+
+createRoot(document.getElementById('root')).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+)

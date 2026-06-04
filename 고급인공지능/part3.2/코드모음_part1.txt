@@ -1,0 +1,982 @@
+
+
+============================================================
+[26-06-04 01:19] features\voice_listener.py (209줄)
+============================================================
+
+import threading
+import asyncio
+import json
+import time
+import numpy as np
+import pyaudio
+import queue
+from openwakeword.model import Model
+from google import genai
+from google.genai import types
+
+WAKEWORD = "hey_jarvis"
+NORMAL_THRESHOLD = 0.5
+CONV_THRESHOLD = 0.1
+CONV_DURATION = 300
+SAMPLE_RATE = 16000
+CHUNK = 1280
+LIVE_MODEL = "gemini-3.1-flash-live-preview"
+
+class VoiceListener:
+    def __init__(self, bot, show_bubble_func):
+        self.bot = bot
+        self.show_bubble = show_bubble_func
+        self.oww_model = Model(wakeword_models=[WAKEWORD], inference_framework="onnx")
+        self._running = False
+        self._listening = False
+        self.last_interaction_time = 0
+        self.api_key = ""
+        try:
+            with open("config.json", "r") as f:
+                self.api_key = json.load(f).get("gemini_api_key", "")
+        except Exception: pass
+
+    def start(self):
+        if self._running: return
+        self._running = True
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+        print(f"🎤 자비스 음성 엔진 가동 (호출어: '{WAKEWORD}')")
+
+    def _audio_play_worker(self, play_queue, audio_out):
+        while True:
+            data = play_queue.get()
+            if data is None: break
+            try: audio_out.write(data)
+            except Exception: pass
+            play_queue.task_done()
+
+    def _loop(self):
+        pa = pyaudio.PyAudio()
+        stream = pa.open(rate=SAMPLE_RATE, channels=1, format=pyaudio.paInt16, input=True, frames_per_buffer=CHUNK)
+        try:
+            while self._running:
+                raw = stream.read(CHUNK, exception_on_overflow=False)
+                audio = np.frombuffer(raw, dtype=np.int16)
+                if self._listening: continue
+                prediction = self.oww_model.predict(audio)
+                score = prediction.get(WAKEWORD, 0)
+                current_time = time.time()
+                in_conv = (current_time - self.last_interaction_time) < CONV_DURATION
+                active_threshold = CONV_THRESHOLD if in_conv else NORMAL_THRESHOLD
+                if score >= active_threshold:
+                    print(f"\n✅ 자비스 호출 감지! (점수: {score:.2f})")
+                    self.oww_model.reset()
+                    self._listening = True
+                    asyncio.run(self._live_api_session(stream, pa))
+                    self.last_interaction_time = time.time()
+                    self._listening = False
+        finally:
+            stream.stop_stream(); stream.close(); pa.terminate()
+
+    async def _live_api_session(self, stream, pa):
+        if not self.api_key: return
+        client = genai.Client(api_key=self.api_key)
+        
+        # 💡 [업그레이드] 알람과 글자 찾기(find) 파라미터가 추가된 도구 스키마
+        robot_tool = {
+            "function_declarations": [
+                {
+                    "name": "execute_robot_command",
+                    "description": "자비스 로봇의 UI 기능(타이머, 알람, 화면 캡처, 날씨, 주식, 달력, 폴더, 글자 찾기, 가이드)을 실행합니다.",
+                    "parameters": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "action": {
+                                "type": "STRING",
+                                "description": "명령 종류: 'timer', 'alarm', 'screenshot', 'weather', 'stock', 'todo', 'folder', 'guide', 'find'"
+                            },
+                            "minutes": {
+                                "type": "INTEGER",
+                                "description": "타이머를 설정할 때의 분(minute) 단위 시간"
+                            },
+                            "alarm_time": {
+                                "type": "STRING",
+                                "description": "알람을 설정할 때의 시간 (반드시 'HH:MM' 형식, 예: '08:30', '14:00')"
+                            },
+                            "target_word": {
+                                "type": "STRING",
+                                "description": "화면에서 찾을 특정 글자나 단어"
+                            }
+                        },
+                        "required": ["action"]
+                    }
+                }
+            ]
+        }
+
+        # 💡 시스템 지침에 알람과 글자 찾기 사용법 명시
+        config = types.LiveConnectConfig(
+            response_modalities=["AUDIO"],
+            tools=[robot_tool],
+            system_instruction=(
+                "너는 AI 비서 자비스야. 짧고 명확하게 한국어로 대답해줘. "
+                "사용자가 타이머, 알람, 화면 캡처, 날씨, 주식, 일정(달력), 폴더 열기, 가이드, 또는 화면에서 특정 글자 찾기를 요구하면, "
+                "말로 대답하는 것과 동시에 반드시 'execute_robot_command' 도구를 호출해서 기능을 실행시켜. "
+                "알람 설정 시 시간(HH:MM)을 'alarm_time' 파라미터로 넘겨주고, 글자 찾기 요구 시 찾을 단어를 'target_word' 파라미터로 넘겨줘."
+            )
+        )
+        
+        audio_out = pa.open(rate=24000, channels=1, format=pyaudio.paInt16, output=True)
+        play_queue = queue.Queue()
+        play_thread = threading.Thread(target=self._audio_play_worker, args=(play_queue, audio_out), daemon=True)
+        play_thread.start()
+
+        try:
+            async with client.aio.live.connect(model=LIVE_MODEL, config=config) as session:
+                print("🔊 자비스 연결됨...")
+                async def send_mic():
+                    while self._listening:
+                        raw = await asyncio.to_thread(stream.read, CHUNK, exception_on_overflow=False)
+                        audio_arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+                        rms = int(np.sqrt(np.mean(audio_arr ** 2)))
+                        level = min(rms // 150, 20)
+                        bar = "█" * level + "░" * (20 - level)
+                        print(f"\r🎤 |{bar}| ", end="", flush=True)
+                        await session.send_realtime_input(audio=types.Blob(data=raw, mime_type=f"audio/pcm;rate={SAMPLE_RATE}"))
+                
+                send_task = asyncio.create_task(send_mic())
+                
+                async for response in session.receive():
+                    # 툴 호출(명령) 감지
+                    if response.tool_call:
+                        for fc in response.tool_call.function_calls:
+                            if fc.name == "execute_robot_command":
+                                args = dict(fc.args) if fc.args else {}
+                                print(f"\n⚡ [도구 호출 감지] 명령 실행: {args}")
+                                handle_voice_command(args, self.bot, self.show_bubble)
+
+                    # 오디오 출력 처리
+                    if response.server_content and response.server_content.model_turn:
+                        for part in response.server_content.model_turn.parts:
+                            if part.inline_data: 
+                                play_queue.put(part.inline_data.data)
+                                
+                    if response.server_content and response.server_content.turn_complete:
+                        while not play_queue.empty(): await asyncio.sleep(0.1)
+                        await asyncio.sleep(0.6); break
+                        
+                send_task.cancel()
+        except Exception as e: print(f"\n❌ 세션 오류: {e}")
+        finally:
+            play_queue.put(None); play_thread.join(); audio_out.close()
+            print("\n👌 대화 완료!")
+
+# ---------------------------------------------------------
+# 🎮 명령 실행 핸들러 (로봇 연동)
+# ---------------------------------------------------------
+def handle_voice_command(result, bot, show_bubble_func):
+    action = result.get("action", "unknown")
+
+    if action == "timer":
+        minutes = int(result.get("minutes", 5))
+        bot.start_timer(minutes)
+        show_bubble_func(f"⏳ {minutes}분 타이머를 시작합니다.", "ALARM", 3000)
+
+    elif action == "alarm":
+        # 💡 [신규] 팝업창 없이 즉시 알람 설정
+        alarm_time = result.get("alarm_time")
+        if alarm_time:
+            bot.timer_alarm.target_alarm_time = alarm_time
+            show_bubble_func(f"⏰ 오늘 {alarm_time}에 알람이 설정되었습니다!", "ALARM", 3000, True)
+        else:
+            bot.set_alarm() # 시간이 없으면 기존 팝업창 띄우기
+
+    elif action == "find":
+        # 💡 [신규] OCR 글자 추적 즉시 실행
+        target_word = result.get("target_word")
+        if target_word:
+            bot.start_tracking_target_by_word(target_word)
+        else:
+            bot.start_guide_mode()
+
+    elif action == "screenshot":
+        bot.start_screenshot()
+
+    elif action == "weather":
+        bot._on_weather_click(None)
+
+    elif action == "stock":
+        bot.toggle_stock_bubbles()
+
+    elif action == "todo":
+        bot.toggle_todo_bubbles()
+
+    elif action == "folder":
+        bot.toggle_folder_bubbles()
+
+    elif action == "guide":
+        bot.start_guide_mode()
+
+============================================================
+[26-06-03 22:13] floating_bot.py (83줄)
+============================================================
+
+import tkinter as tk
+import threading
+import ctypes
+import sqlite3
+from core.settings import get_settings
+from core.database import init_db, get_db_connection
+from core.event_handler import BotEventHandler
+from ui.bubble_ui import BubbleUI
+from ui.toolbar_ui import ToolbarUI
+from ui.history_ui import HistoryUI
+from features.voice_listener import VoiceListener
+from bot_features import AssistantFeatures
+
+# 💡 [복구] 뉴스 DB 조회 함수
+def get_news_from_db(limit, keyword=""):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        query = "SELECT title, url FROM news"
+        params = []
+        if keyword:
+            query += " WHERE title LIKE ? OR ai_summary LIKE ?"
+            params.extend([f"%{keyword}%", f"%{keyword}%"])
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        cursor.execute(query, params)
+        result = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return result
+    except: return []
+
+def fetch_news_loop(bot, bubble):
+    import time, random
+    while True:
+        bot.check_alarm()
+        s = get_settings()
+        news = get_news_from_db(30, s["custom_keyword"])
+        if news:
+            sample = random.sample(news, min(len(news), s["news_count"]))
+            root.after(0, lambda: bubble.play_sequence(sample, 0, s["bubble_duration"]))
+        time.sleep(s["alarm_interval"])
+
+if __name__ == "__main__":
+    try: ctypes.windll.user32.SetProcessDPIAware()
+    except: pass
+    init_db()
+    root = tk.Tk()
+    sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+    root.geometry(f"+{sw-150}+{sh-150}")
+    root.overrideredirect(True)
+    root.attributes("-topmost", True)
+    root.configure(bg='#202124')
+
+    face_label = tk.Label(root, text="🤖", font=("Arial", 45), bg="#202124", fg="white", cursor="fleur")
+    face_label.pack(side="bottom")
+
+    bubble = BubbleUI(root, None)
+    bot = AssistantFeatures(root, face_label, bubble.show)
+    bubble.bot = bot
+    
+    # 💡 [해결] 툴바와 뉴스창에 필요한 함수들을 제대로 전달
+    def open_and_close(url, win_type):
+        import webbrowser
+        if url: webbrowser.open(url)
+        if win_type == "history": history.hide()
+
+    toolbar = ToolbarUI(root, bot)
+    # 핵심: get_news_from_db와 open_and_close를 역사창(HistoryUI)에 주입
+    history = HistoryUI(root, get_news_from_db, open_and_close)
+    
+    handler = BotEventHandler(root, face_label, bot)
+    voice = VoiceListener(bot, bubble.show)
+    voice.start()
+
+    def close_all():
+        toolbar.hide(); history.hide(); bubble.hide()
+
+    face_label.bind("<ButtonPress-1>", handler.on_press)
+    face_label.bind("<B1-Motion>", lambda e: handler.on_drag(e, close_all))
+    face_label.bind("<ButtonRelease-1>", lambda e: [history.toggle(), toolbar.toggle()] if not getattr(face_label, '_is_dragging', False) else None)
+
+    threading.Thread(target=fetch_news_loop, args=(bot, bubble), daemon=True).start()
+    root.mainloop()
+
+============================================================
+[26-06-03 22:09] api_server.py (102줄)
+============================================================
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+import os
+import pandas as pd
+import pickle
+import datetime as _dt
+import threading
+
+# core 및 api 라우터 임포트
+from core.database import init_db
+from api.news_api import router as news_router
+from api.stock_api import router as stock_router
+from api.schedule_api import router as schedule_router
+
+app = FastAPI()
+
+# CORS 설정
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:8000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 라우터 연결
+app.include_router(news_router)
+app.include_router(stock_router)
+app.include_router(schedule_router)
+
+# ---------------------------------------------------------
+# 📈 주식 종목 데이터 캐싱 및 다운로드 로직
+# ---------------------------------------------------------
+CACHE_FILE = "stock_cache.pkl"
+CACHE_MAX_AGE_DAYS = 1
+
+_df_krx = None
+_df_us = None
+
+def _load_cache():
+    global _df_krx, _df_us
+    if not os.path.exists(CACHE_FILE): return False
+    try:
+        with open(CACHE_FILE, "rb") as f:
+            cache = pickle.load(f)
+        saved_at = cache.get("saved_at")
+        if (_dt.datetime.now() - saved_at).days >= CACHE_MAX_AGE_DAYS: return False
+        _df_krx = cache["krx"]
+        _df_us  = cache["us"]
+        print(f"✅ 주식 캐시 로드 완료 (KRX {len(_df_krx)}개 / US {len(_df_us)}개)")
+        return True
+    except: return False
+
+def _download_and_save():
+    global _df_krx, _df_us
+    import FinanceDataReader as fdr
+    print("📡 KRX 종목 목록 다운로드 중...")
+    _df_krx = fdr.StockListing('KRX')
+    print("📡 US 종목 목록 다운로드 중...")
+    df_nasdaq = fdr.StockListing('NASDAQ')
+    df_nyse   = fdr.StockListing('NYSE')
+    df_amex   = fdr.StockListing('AMEX')
+    _df_us = pd.concat([df_nasdaq, df_nyse, df_amex], ignore_index=True)
+    with open(CACHE_FILE, "wb") as f:
+        pickle.dump({"krx": _df_krx, "us": _df_us, "saved_at": _dt.datetime.now()}, f)
+    print("✅ 주식 데이터 업데이트 완료")
+
+def get_krx():
+    global _df_krx
+    if _df_krx is None:
+        if not _load_cache(): _download_and_save()
+    return _df_krx
+
+def get_us():
+    global _df_us
+    if _df_us is None:
+        if not _load_cache(): _download_and_save()
+    return _df_us
+
+# ---------------------------------------------------------
+# 🚀 서버 시작 및 종료 이벤트
+# ---------------------------------------------------------
+@app.on_event("startup")
+def startup_event():
+    # DB 테이블 초기화 (core/database.py)
+    init_db()
+    
+    # 주식 데이터 캐시 로드 또는 다운로드
+    if not _load_cache():
+        threading.Thread(target=_download_and_save, daemon=True).start()
+
+# ---------------------------------------------------------
+# 📂 정적 파일 서빙 (React 빌드 결과물)
+# ---------------------------------------------------------
+if os.path.exists("news-app/dist"):
+    app.mount("/", StaticFiles(directory="news-app/dist", html=True), name="static")
+
+if __name__ == "__main__":
+    import uvicorn
+    print("🚀 자비스 API 서버 가동 중 (Port: 8000)")
+    uvicorn.run("api_server:app", host="0.0.0.0", port=8000, reload=True)
+
+============================================================
+[26-06-03 22:08] api\schedule_api.py (63줄)
+============================================================
+
+from fastapi import APIRouter
+from pydantic import BaseModel
+from core.database import get_db_connection
+
+router = APIRouter(prefix="/api")
+
+class ScheduleItem(BaseModel):
+    date: str
+    content: str
+
+class ClipboardItem(BaseModel):
+    type: str
+    content: str
+
+@router.get("/schedule/{date}")
+def get_schedule(date: str):
+    """특정 날짜의 일정을 조회합니다."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, content FROM schedule WHERE date = ? ORDER BY id ASC", (date,))
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return {"status": "success", "data": rows}
+
+@router.post("/schedule")
+def add_schedule(item: ScheduleItem):
+    """새로운 일정을 등록합니다."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO schedule (date, content) VALUES (?, ?)", (item.date, item.content))
+    conn.commit()
+    conn.close()
+    return {"status": "success"}
+
+@router.delete("/schedule/{id}")
+def delete_schedule(id: int):
+    """일정을 삭제합니다."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM schedule WHERE id = ?", (id,))
+    conn.commit()
+    conn.close()
+    return {"status": "success"}
+
+@router.get("/clipboard")
+def get_clipboard():
+    """최근 20개의 클립보드 내역을 가져옵니다."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, type, content, created_at FROM clipboard ORDER BY created_at DESC LIMIT 20")
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return {"status": "success", "data": rows}
+
+@router.post("/clipboard")
+def add_clipboard(item: ClipboardItem):
+    """클립보드 내용을 추가합니다 (이미지 포함)."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO clipboard (type, content) VALUES (?, ?)", (item.type, item.content))
+    conn.commit()
+    conn.close()
+    return {"status": "success"}
+
+============================================================
+[26-06-03 22:08] api\stock_api.py (83줄)
+============================================================
+
+from fastapi import APIRouter
+import sqlite3
+from pydantic import BaseModel
+from core.database import get_db_connection
+from stock_adapter import get_realtime_stock
+
+router = APIRouter(prefix="/api")
+
+class StockItem(BaseModel):
+    name: str
+    ticker: str = ""
+
+KR_TO_EN = {
+    "아마존": "Amazon", "애플": "Apple", "테슬라": "Tesla",
+    "구글": "Alphabet", "알파벳": "Alphabet", "마이크로소프트": "Microsoft",
+    "엔비디아": "NVIDIA", "메타": "Meta", "넷플릭스": "Netflix",
+    "삼성": "Samsung", "팔란티어": "Palantir", "스타벅스": "Starbucks",
+    "코카콜라": "Coca-Cola", "나이키": "Nike", "디즈니": "Disney",
+}
+
+@router.get("/stock/{ticker}")
+def get_stock_price(ticker: str):
+    """특정 티커의 실시간 시세를 가져옵니다."""
+    return get_realtime_stock(ticker)
+
+@router.get("/favorites")
+def get_favorite_stocks():
+    """DB에 등록된 관심 종목 목록을 가져옵니다."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT id, name, ticker FROM favorite_stocks ORDER BY id ASC")
+        return {"status": "success", "data": [dict(r) for r in cursor.fetchall()]}
+    except:
+        return {"status": "success", "data": []}
+    finally:
+        conn.close()
+
+@router.post("/favorites")
+def add_favorite_stock(item: StockItem):
+    """새로운 관심 종목을 추가합니다. 티커가 없으면 자동으로 찾아줍니다."""
+    from api_server import get_krx, get_us  # 캐시 데이터 참조
+    try:
+        ticker = item.ticker
+        if not ticker:
+            df_krx = get_krx()
+            krx_match = df_krx[df_krx['Name'] == item.name]
+            if not krx_match.empty:
+                row = krx_match.iloc[0]
+                ticker = f"{row['Code']}.KS" if row['Market'] == 'KOSPI' else f"{row['Code']}.KQ"
+            else:
+                en_name = KR_TO_EN.get(item.name, item.name)
+                df_us = get_us()
+                us_match = df_us[df_us['Name'].str.contains(en_name, case=False, na=False, regex=False)]
+                if not us_match.empty:
+                    ticker = us_match.iloc[0]['Symbol']
+                else:
+                    name_lower = item.name.lower()
+                    if "비트" in name_lower or "bitcoin" in name_lower: ticker = "BTC-USD"
+                    elif "이더" in name_lower or "ethereum" in name_lower: ticker = "ETH-USD"
+                    else: return {"status": "error", "message": f"'{item.name}' 종목을 찾지 못했습니다."}
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO favorite_stocks (name, ticker) VALUES (?, ?)", (item.name, ticker))
+        conn.commit()
+        return {"status": "success"}
+    except sqlite3.IntegrityError:
+        return {"status": "error", "message": f"[{item.name}] 이미 등록된 관심종목입니다!"}
+    except Exception as e:
+        return {"status": "error", "message": f"오류 발생: {e}"}
+    finally:
+        if 'conn' in locals(): conn.close()
+
+@router.delete("/favorites/{id}")
+def delete_favorite_stock(id: int):
+    """관심 종목을 삭제합니다."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM favorite_stocks WHERE id = ?", (id,))
+    conn.commit()
+    conn.close()
+    return {"status": "success"}
+
+============================================================
+[26-06-03 22:08] api\news_api.py (57줄)
+============================================================
+
+from fastapi import APIRouter, HTTPException
+from core.database import get_db_connection
+
+router = APIRouter(prefix="/api")
+
+@router.get("/news")
+def get_all_news(limit: int = 10, offset: int = 0):
+    """모든 뉴스를 최신순으로 조회합니다 (무한 스크롤 지원)."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, category_code, title, url, ai_summary, created_at FROM news "
+        "ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        (limit, offset)
+    )
+    data = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return {"status": "success", "data": data}
+
+@router.get("/news/{category_code}")
+def get_news_by_category(category_code: str, limit: int = 10, offset: int = 0):
+    """특정 카테고리의 뉴스를 조회합니다."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT id, category_code, title, url, ai_summary, created_at FROM news "
+            "WHERE category_code = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (category_code, limit, offset)
+        )
+        return {"status": "success", "data": [dict(row) for row in cursor.fetchall()]}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        conn.close()
+
+@router.get("/search")
+def search_news(q: str = "", keyword: str = "", limit: int = 10, offset: int = 0):
+    """제목이나 요약 내용에서 키워드로 뉴스를 검색합니다."""
+    search_term = q or keyword
+    if not search_term:
+        return {"status": "error", "message": "검색어를 입력하세요"}
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        term = f"%{search_term}%"
+        cursor.execute(
+            "SELECT id, category_code, title, url, ai_summary, created_at FROM news "
+            "WHERE title LIKE ? OR ai_summary LIKE ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (term, term, limit, offset)
+        )
+        return {"status": "success", "data": [dict(row) for row in cursor.fetchall()]}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        conn.close()
+
+============================================================
+[26-06-03 21:58] ui\history_ui.py (126줄)
+============================================================
+
+import tkinter as tk
+from core.settings import get_settings, save_custom_keyword
+
+class HistoryUI:
+    def __init__(self, root, get_news_from_db_callback, open_and_close_callback):
+        self.root = root
+        self.get_news_from_db = get_news_from_db_callback
+        self.open_and_close = open_and_close_callback
+        self.history_win = None
+
+    def toggle(self):
+        if self.history_win and self.history_win.winfo_exists():
+            self.hide()
+        else:
+            self.show()
+
+    def show(self):
+        if self.history_win and self.history_win.winfo_exists():
+            self.history_win.destroy()
+        
+        settings = get_settings()
+        self.history_win = tk.Toplevel(self.root)
+        self.history_win.overrideredirect(True)
+        self.history_win.attributes("-topmost", True)
+        self.history_win.configure(bg='magenta')
+        self.history_win.attributes("-transparentcolor", "magenta")
+
+        main_frame = tk.Frame(self.history_win, bg="white", relief="solid", bd=2)
+        main_frame.pack(fill="both", expand=True)
+        
+        tk.Label(main_frame, text="📰 맞춤형 뉴스 브리핑", bg="#ffeb3b", fg="black", font=("맑은 고딕", 9, "bold"), padx=5, pady=6).pack(fill="x", side="top")
+
+        search_frame = tk.Frame(main_frame, bg="#f1f3f4", padx=5, pady=5)
+        search_frame.pack(fill="x", side="top")
+        tk.Label(search_frame, text="관심 키워드:", bg="#f1f3f4", font=("맑은 고딕", 8, "bold")).pack(side="left")
+        
+        search_var = tk.StringVar(value=settings["custom_keyword"])
+        search_entry = tk.Entry(search_frame, textvariable=search_var, font=("맑은 고딕", 9), relief="solid", bd=1)
+        search_entry.pack(side="left", fill="x", expand=True, padx=(5, 5), ipady=2)
+        
+        def apply_custom_keyword():
+            kw = search_var.get().strip()
+            save_custom_keyword(kw)
+            load_news_list(kw)     
+            
+        tk.Button(search_frame, text="적용", font=("맑은 고딕", 8, "bold"), bg="#1a73e8", fg="white", relief="flat", cursor="hand2", command=apply_custom_keyword).pack(side="right", ipady=1)
+        search_entry.bind("<Return>", lambda e: apply_custom_keyword())
+
+        bottom_frame = tk.Frame(main_frame, bg="white")
+        bottom_frame.pack(fill="x", side="bottom")
+        
+        resizer = tk.Label(bottom_frame, text="◢", font=("Arial", 14), bg="white", fg="#b0b0b0", cursor="size_nw_se")
+        resizer.pack(side="right", anchor="se", padx=5)
+
+        btn_frame = tk.Frame(bottom_frame, bg="white")
+        btn_frame.pack(side="left", fill="x", expand=True)
+        lbl_dash = tk.Label(btn_frame, text="🌐 리액트 대시보드 열기", bg="#e3f2fd", fg="#1a73e8", font=("맑은 고딕", 9, "bold"), cursor="hand2", padx=5, pady=8)
+        lbl_dash.pack(fill="x", pady=(5, 0))
+        lbl_dash.bind("<Button-1>", lambda e: self.open_and_close("http://localhost:8000", "history"))
+
+        middle_frame = tk.Frame(main_frame, bg="white")
+        middle_frame.pack(fill="both", expand=True, side="top")
+
+        canvas = tk.Canvas(middle_frame, bg="white", highlightthickness=0, width=290, height=350)
+        scrollbar = tk.Scrollbar(middle_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg="white")
+        
+        scrollable_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        frame_id = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(frame_id, width=e.width))
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        self.history_win.bind("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        def load_news_list(keyword=""):
+            for widget in scrollable_frame.winfo_children(): widget.destroy()
+            items = self.get_news_from_db(settings["news_count"], keyword)
+            if not items:
+                tk.Label(scrollable_frame, text=f"'{keyword}' 관련 뉴스가 없습니다." if keyword else "아직 뉴스가 없습니다.", bg="white", font=("맑은 고딕", 9)).pack(pady=20)
+            else:
+                for item in items:
+                    lbl = tk.Label(scrollable_frame, text=f"💬 {item['title']}", bg="white", fg="#202124", font=("맑은 고딕", 9), anchor="w", relief="solid", bd=1, padx=5, pady=8, cursor="hand2")
+                    lbl.pack(pady=2, padx=5, fill="x")
+                    lbl.bind("<Enter>", lambda e, l=lbl: l.config(bg="#e8f0fe", fg="#1a73e8"))
+                    lbl.bind("<Leave>", lambda e, l=lbl: l.config(bg="white", fg="#202124"))
+                    lbl.bind("<Button-1>", lambda e, u=item['url']: self.open_and_close(u, "history"))
+            canvas.yview_moveto(0)
+
+        load_news_list(settings["custom_keyword"])
+
+        def start_resize(e):
+            self.history_win._resize_start_x = e.x_root
+            self.history_win._resize_start_y = e.y_root
+            self.history_win._init_width = self.history_win.winfo_width()
+            self.history_win._init_height = self.history_win.winfo_height()
+            self.history_win._x = self.history_win.winfo_x()
+            self.history_win._y = self.history_win.winfo_y()
+
+        def do_resize(e):
+            new_w = max(250, self.history_win._init_width + (e.x_root - self.history_win._resize_start_x))
+            new_h = max(200, self.history_win._init_height + (e.y_root - self.history_win._resize_start_y))
+            self.history_win.geometry(f"{new_w}x{new_h}+{self.history_win._x}+{self.history_win._y}")
+
+        resizer.bind("<ButtonPress-1>", start_resize)
+        resizer.bind("<B1-Motion>", do_resize)
+        self.update_position()
+
+    def hide(self):
+        if self.history_win and self.history_win.winfo_exists():
+            self.history_win.destroy()
+        self.history_win = None
+
+    def update_position(self):
+        if not self.history_win or not self.history_win.winfo_exists(): return
+        self.history_win.update_idletasks()
+        rx, ry, rw = self.root.winfo_x(), self.root.winfo_y(), self.root.winfo_width()
+        hw, hh = self.history_win.winfo_reqwidth(), self.history_win.winfo_reqheight()
+        sw = self.root.winfo_screenwidth()
+        
+        if rx + rw + hw + 5 <= sw: hx = rx + rw + 5
+        elif rx - hw - 5 >= 0: hx = rx - hw - 5
+        else: hx = sw - hw
+        self.history_win.geometry(f"+{hx}+{ry - hh - 10}")
+
+============================================================
+[26-06-03 21:58] ui\toolbar_ui.py (90줄)
+============================================================
+
+import tkinter as tk
+
+class ToolbarUI:
+    def __init__(self, root, bot_ref):
+        self.root = root
+        self.bot = bot_ref
+        self.toolbar_win = None
+        self.btn_style = {"bg": "#3c4043", "fg": "white", "font": ("맑은 고딕", 9, "bold"), "relief": "flat", "cursor": "hand2", "padx": 8, "pady": 5}
+        self.sub_btn_style = {"bg": "#1a73e8", "fg": "white", "font": ("맑은 고딕", 9, "bold"), "relief": "flat", "cursor": "hand2", "padx": 6, "pady": 4}
+
+    def toggle(self):
+        if self.toolbar_win and self.toolbar_win.winfo_exists():
+            self.hide()
+        else:
+            self.show()
+
+    def show(self):
+        if self.toolbar_win and self.toolbar_win.winfo_exists():
+            self.toolbar_win.destroy()
+        
+        self.toolbar_win = tk.Toplevel(self.root)
+        self.toolbar_win.overrideredirect(True)
+        self.toolbar_win.attributes("-topmost", True)
+        self.toolbar_win.configure(bg='magenta')
+        self.toolbar_win.attributes("-transparentcolor", "magenta")
+
+        self.bar_frame = tk.Frame(self.toolbar_win, bg="#202124", padx=10, pady=5, relief="flat", bd=0)
+        self.bar_frame.pack()
+        self.draw_main_toolbar()
+
+    def draw_main_toolbar(self):
+        for w in self.bar_frame.winfo_children(): w.destroy()
+        
+        if not self.bot.timer_alarm.is_timer_running:
+            tk.Button(self.bar_frame, text="⏳ 타이머", command=self.draw_timer_toolbar, **self.btn_style).pack(side="left", padx=3)
+        else: 
+            tk.Button(self.bar_frame, text="🛑 정지", command=lambda: [self.bot.stop_timer(), self.hide()], **self.btn_style).pack(side="left", padx=3)
+        
+        tk.Button(self.bar_frame, text="⏰ 알람", command=lambda: [self.bot.set_alarm(), self.hide()], **self.btn_style).pack(side="left", padx=3)
+        tk.Button(self.bar_frame, text="📅 달력", command=self.bot.toggle_todo_bubbles, **self.btn_style).pack(side="left", padx=3)
+        tk.Button(self.bar_frame, text="📸 캡처", command=lambda: [self.hide(), self.bot.start_screenshot()], **self.btn_style).pack(side="left", padx=3)
+        tk.Button(self.bar_frame, text="📁 폴더", command=self.bot.toggle_folder_bubbles, **self.btn_style).pack(side="left", padx=3)
+        tk.Button(self.bar_frame, text="📈 주식", command=self.bot.toggle_stock_bubbles, **self.btn_style).pack(side="left", padx=3)
+        tk.Button(self.bar_frame, text="🧭 가이드", command=lambda: [self.hide(), self.bot.start_guide_mode()], **self.btn_style).pack(side="left", padx=3)
+        tk.Button(self.bar_frame, text="✖ 닫기", command=self.hide, bg="#ea4335", fg="white", font=("맑은 고딕", 9, "bold"), relief="flat", cursor="hand2", padx=8, pady=5).pack(side="left", padx=(10,3))
+        self.update_position()
+
+    def draw_timer_toolbar(self):
+        for w in self.bar_frame.winfo_children(): w.destroy()
+        
+        def start_and_close(m):
+            self.bot.start_timer(m)
+            self.hide()
+
+        def start_custom_timer(val):
+            try:
+                m = int(val)
+                if m > 0: start_and_close(m)
+            except: pass
+
+        tk.Button(self.bar_frame, text="1분", command=lambda: start_and_close(1), **self.sub_btn_style).pack(side="left", padx=2)
+        tk.Button(self.bar_frame, text="3분", command=lambda: start_and_close(3), **self.sub_btn_style).pack(side="left", padx=2)
+        tk.Button(self.bar_frame, text="5분", command=lambda: start_and_close(5), **self.sub_btn_style).pack(side="left", padx=2)
+        tk.Button(self.bar_frame, text="10분", command=lambda: start_and_close(10), **self.sub_btn_style).pack(side="left", padx=2)
+        
+        custom_var = tk.StringVar()
+        entry = tk.Entry(self.bar_frame, textvariable=custom_var, width=4, font=("맑은 고딕", 10, "bold"), justify="center", bd=0)
+        entry.pack(side="left", padx=(8, 2), ipady=4)
+        
+        tk.Button(self.bar_frame, text="확인", command=lambda: start_custom_timer(custom_var.get()), bg="#34a853", fg="white", font=("맑은 고딕", 9, "bold"), relief="flat", cursor="hand2").pack(side="left", padx=2, ipady=1)
+        tk.Button(self.bar_frame, text="🔙", command=self.draw_main_toolbar, bg="#5f6368", fg="white", font=("맑은 고딕", 9), relief="flat", cursor="hand2", padx=5).pack(side="left", padx=(10, 0))
+        self.update_position()
+
+    def hide(self):
+        if self.toolbar_win and self.toolbar_win.winfo_exists():
+            self.toolbar_win.destroy()
+        self.toolbar_win = None
+
+    def update_position(self):
+        if not self.toolbar_win or not self.toolbar_win.winfo_exists(): return
+        self.toolbar_win.update_idletasks()
+        sw = self.root.winfo_screenwidth()
+        rx, ry, rw = self.root.winfo_x(), self.root.winfo_y(), self.root.winfo_width()
+        tw, th = self.toolbar_win.winfo_reqwidth(), self.toolbar_win.winfo_reqheight()
+
+        if rx + rw + tw + 5 <= sw: x = rx + rw + 5
+        elif rx - tw - 5 >= 0: x = rx - tw - 5
+        else: x = sw - tw
+        y = ry + (self.root.winfo_height() // 2) - (th // 2)
+        self.toolbar_win.geometry(f"+{x}+{y}")
+
+============================================================
+[26-06-03 21:51] ui\bubble_ui.py (81줄)
+============================================================
+
+import tkinter as tk
+
+class BubbleUI:
+    def __init__(self, root, bot_ref):
+        self.root = root
+        self.bot = bot_ref
+        self.bubble_win = None
+        self.current_url = ""
+
+    def show(self, title, url, duration_ms, auto_hide=True):
+        """다양한 알림 유형에 맞는 말풍선을 화면에 표시합니다."""
+        self.current_url = url
+        
+        if self.bubble_win and self.bubble_win.winfo_exists():
+            self.bubble_win.destroy()
+            
+        self.bubble_win = tk.Toplevel(self.root)
+        self.bubble_win.overrideredirect(True)
+        self.bubble_win.attributes("-topmost", True)
+        self.bubble_win.configure(bg='magenta')
+        self.bubble_win.attributes("-transparentcolor", "magenta")
+        
+        # 유형별 테마 설정
+        if url == "TIMER": 
+            header_text, bg_color, fg_color = "⏳ [타이머 종료!]", "#ffeb3b", "#d32f2f"
+        elif url == "ALARM": 
+            header_text, bg_color, fg_color = "⏰ [알람 시간입니다!]", "#fce4ec", "#c2185b"
+        elif url == "WEATHER": 
+            header_text, bg_color, fg_color = "⛅ [오늘의 날씨 브리핑]", "#e0f7fa", "#006064"
+        else: 
+            header_text, bg_color, fg_color = "🔔 [최신 뉴스 브리핑!]", "#e8f0fe", "#1a73e8"
+
+        short_title = title if url in ["ALARM", "TIMER", "WEATHER"] else (title[:30] + "..." if len(title) > 30 else title)
+
+        lbl = tk.Label(self.bubble_win, text=f"{header_text}\n{short_title}", bg=bg_color, fg=fg_color, 
+                       font=("맑은 고딕", 9, "bold"), wraplength=200, relief="solid", bd=2, padx=10, pady=10, cursor="hand2")
+        lbl.pack()
+        
+        # 외부 웹 브라우저 연결 바인딩 (메인 로직 참조)
+        from webbrowser import open as web_open
+        lbl.bind("<Button-1>", lambda e: [web_open(self.current_url) if self.current_url not in ["ALARM", "TIMER", "WEATHER"] else None, self.hide()])
+        
+        self.update_position()
+        if auto_hide: self.root.after(duration_ms, self.hide)
+
+    def play_sequence(self, news_list, index, duration_ms):
+        """여러 개의 뉴스를 순차적으로 보여줍니다."""
+        if index < len(news_list):
+            news = news_list[index]
+            self.show(news['title'], news['url'], duration_ms, auto_hide=False)
+            self.root.after(duration_ms, lambda: self.play_sequence(news_list, index + 1, duration_ms))
+        else:
+            self.hide()
+
+    def hide(self):
+        """말풍선을 닫습니다."""
+        if self.bubble_win and self.bubble_win.winfo_exists():
+            self.bubble_win.destroy()
+        self.bubble_win = None
+
+    def update_position(self):
+        """로봇 위치에 맞춰 말풍선 좌표를 계산합니다."""
+        if not self.bubble_win: return
+        self.bubble_win.update_idletasks()
+        rx, ry, rw = self.root.winfo_x(), self.root.winfo_y(), self.root.winfo_width()
+        bw, bh = self.bubble_win.winfo_reqwidth(), self.bubble_win.winfo_reqheight()
+        sw = self.root.winfo_screenwidth()
+        
+        bx = rx + (rw // 2) - (bw // 2)
+        if bx + bw > sw: bx = sw - bw - 5
+        if bx < 0: bx = 5
+        
+        # 다른 창들이 열려있을 경우 위로 쌓기 위해 최상단 Y 좌표 찾기
+        highest_y = ry
+        for feature in ['todo', 'folder', 'stock']:
+            attr = getattr(self.bot, feature, None)
+            if attr and hasattr(attr, f'{feature}_win') and getattr(attr, f'{feature}_win'):
+                win = getattr(attr, f'{feature}_win')
+                if win.winfo_exists(): highest_y = min(highest_y, win.winfo_y())
+
+        self.bubble_win.geometry(f"+{bx}+{highest_y - bh - 10}")
+
+============================================================
+[26-06-03 21:45] core\database.py (37줄)
+============================================================
+
+import sqlite3
+
+def get_db_connection():
+    """
+    멀티스레딩 환경에서 안전하게 SQLite에 접속하고 WAL 모드를 활성화합니다.
+    """
+    conn = sqlite3.connect('news.db', timeout=30, check_same_thread=False)
+    # WAL 모드: 읽기와 쓰기를 동시에 처리하여 성능 최적화
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    """
+    시스템 가동 시 필요한 테이블들을 생성하고 초기 데이터를 삽입합니다.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # 1. 일정 테이블
+    cursor.execute('CREATE TABLE IF NOT EXISTS schedule (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT NOT NULL, content TEXT NOT NULL)')
+    
+    # 2. 클립보드 테이블
+    cursor.execute('CREATE TABLE IF NOT EXISTS clipboard (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, content TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)')
+    
+    # 3. 관심 주식 테이블
+    cursor.execute('CREATE TABLE IF NOT EXISTS favorite_stocks (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, ticker TEXT NOT NULL UNIQUE)')
+    
+    # 초기 주식 데이터 샘플 삽입
+    cursor.execute("SELECT COUNT(*) FROM favorite_stocks")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO favorite_stocks (name, ticker) VALUES ('애플', 'AAPL')")
+        cursor.execute("INSERT INTO favorite_stocks (name, ticker) VALUES ('테슬라', 'TSLA')")
+        cursor.execute("INSERT INTO favorite_stocks (name, ticker) VALUES ('삼성전자', '005930.KS')")
+        
+    conn.commit()
+    conn.close()

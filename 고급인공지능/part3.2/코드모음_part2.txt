@@ -1,0 +1,783 @@
+
+
+============================================================
+[26-06-03 21:45] core\settings.py (33줄)
+============================================================
+
+import json
+import os
+
+CONFIG_FILE = "config.json"
+
+def get_settings():
+    """설정 파일에서 데이터를 읽어오며, 파일이 없으면 기본값을 반환합니다."""
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, "r") as f:
+                data = json.load(f)
+                return {
+                    "alarm_interval": int(data.get("alarm_interval", 10)) * 60, # 초 단위 변환
+                    "bubble_duration": int(data.get("bubble_duration", 5)) * 1000, # ms 단위 변환
+                    "news_count": int(data.get("news_count", 10)),
+                    "custom_keyword": data.get("custom_keyword", "")
+                }
+    except Exception:
+        pass
+    return {"alarm_interval": 600, "bubble_duration": 5000, "news_count": 10, "custom_keyword": ""}
+
+def save_custom_keyword(keyword):
+    """사용자가 입력한 검색 키워드를 설정 파일에 저장합니다."""
+    data = {}
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                data = json.load(f)
+        except Exception:
+            pass
+    data["custom_keyword"] = keyword
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(data, f)
+
+============================================================
+[26-06-03 21:45] core\event_handler.py (35줄)
+============================================================
+
+import time
+
+class BotEventHandler:
+    def __init__(self, root, face_label, bot_instance):
+        self.root = root
+        self.face_label = face_label
+        self.bot = bot_instance
+        self.last_toggle_time = 0
+
+    def on_press(self, event):
+        """마우스 클릭 시작 시 현재 좌표를 저장합니다."""
+        if event.num == 3: return # 우클릭 제외
+        self.face_label._drag_start_x = event.x
+        self.face_label._drag_start_y = event.y
+        self.face_label._is_dragging = False
+
+    def on_drag(self, event, close_menus_callback):
+        """드래그 시 로봇을 이동시키고 열려있는 모든 서브 메뉴를 닫습니다."""
+        dx, dy = abs(event.x - self.face_label._drag_start_x), abs(event.y - self.face_label._drag_start_y)
+        
+        # 5픽셀 이상 움직였을 때만 드래그로 간주
+        if dx > 5 or dy > 5:
+            if not getattr(self.face_label, '_is_dragging', False):
+                close_menus_callback() # 메인 파일의 메뉴 닫기 함수 호출
+                self.face_label._is_dragging = True
+            
+            # 새 좌표 계산 및 윈도우 이동
+            new_x = self.root.winfo_x() - self.face_label._drag_start_x + event.x
+            new_y = self.root.winfo_y() - self.face_label._drag_start_y + event.y
+            self.root.geometry(f"+{new_x}+{new_y}")
+            
+            # 따라다니는 기능들(주식, 일정 등)의 위치도 업데이트
+            if hasattr(self.bot, 'update_todo_position'): self.bot.update_todo_position()
+            if hasattr(self.bot, 'update_folder_position'): self.bot.update_folder_position()
+            if hasattr(self.bot, 'update_stock_position'): self.bot.update_stock_position()
+
+============================================================
+[26-06-03 19:14] testapi.py (232줄)
+============================================================
+
+import numpy as np
+import pyaudio
+import asyncio
+import json
+import threading
+import queue
+import time
+from openwakeword.model import Model
+from google import genai
+from google.genai import types
+
+# 설정 상수
+WAKEWORD    = "hey_jarvis"
+NORMAL_THRESHOLD = 0.5  # 평상시 깨우기 점수
+CONV_THRESHOLD   = 0.1  # 대화 모드 시 점수 (더 민감하게)
+CONV_DURATION    = 300  # 대화 모드 유지 시간 (5분 = 300초)
+SAMPLE_RATE = 16000
+CHUNK       = 1280
+LIVE_MODEL  = "gemini-3.1-flash-live-preview"
+
+# API 키 로드
+api_key = ""
+try:
+    with open("config.json", "r") as f:
+        api_key = json.load(f).get("gemini_api_key", "")
+except Exception:
+    pass
+
+if not api_key:
+    print("❌ config.json에 gemini_api_key가 없습니다!")
+    exit()
+
+print("🎤 자비스 스마트 대화 시스템 가동!")
+print(f"   기본 문턱값: {NORMAL_THRESHOLD} -> 대화 모드 활성화 시: {CONV_THRESHOLD}")
+print("-" * 50)
+
+oww_model = Model(wakeword_models=[WAKEWORD], inference_framework="onnx")
+
+# ── 오디오 재생 백그라운드 스레드 워커 ─────────────────────────────────
+def audio_play_worker(play_queue, audio_out):
+    while True:
+        data = play_queue.get()
+        if data is None:
+            break
+        try:
+            audio_out.write(data)
+        except Exception:
+            pass
+        play_queue.task_done()
+
+
+async def run_live_chat_session(stream, pa):
+    print(f"\n🔌 [{LIVE_MODEL}] 세션 연결 시도...")
+    client = genai.Client(api_key=api_key)
+
+    config = types.LiveConnectConfig(
+        response_modalities=["AUDIO"],
+        system_instruction=(
+            "너는 사용자의 인공지능 비서 자비스야. 친절하고 장황하지 않게 핵심만 짧게 한국어로 대답해줘. "
+            "사용자가 '바이바이', '잘 가', '종료'라고 말하면 반드시 대답에 '안녕히 계세요' 또는 '종료합니다'라는 문구를 포함해줘."
+        )
+    )
+
+    audio_out = pa.open(rate=24000, channels=1, format=pyaudio.paInt16, output=True)
+    
+    play_queue = queue.Queue()
+    play_thread = threading.Thread(target=audio_play_worker, args=(play_queue, audio_out), daemon=True)
+    play_thread.start()
+
+    # 마이크 잔여 버퍼 비우기 (이전 대화 소음 제거)
+    try:
+        available = stream.get_read_available()
+        if available > 0:
+            stream.read(available, exception_on_overflow=False)
+    except Exception:
+        pass
+
+    session_active  = True
+    jarvis_speaking = False
+
+    try:
+        async with client.aio.live.connect(model=LIVE_MODEL, config=config) as session:
+            print("✅ 자비스 연결 성공! 말씀하세요...")
+
+            # ── 1. 송신 태스크 ───────────────────────────────────────────
+            async def send_mic_audio():
+                nonlocal session_active, jarvis_speaking
+                try:
+                    while session_active:
+                        raw = await asyncio.to_thread(
+                            stream.read, CHUNK, exception_on_overflow=False
+                        )
+                        if not session_active:
+                            break
+
+                        if jarvis_speaking:
+                            await asyncio.sleep(0.01)
+                            continue
+
+                        # VU 미터 출력
+                        audio_arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+                        rms   = int(np.sqrt(np.mean(audio_arr ** 2)))
+                        level = min(rms // 150, 20)
+                        bar   = "█" * level + "░" * (20 - level)
+                        print(f"\r🎤 |{bar}| ", end="", flush=True)
+
+                        await session.send_realtime_input(
+                            audio=types.Blob(data=raw, mime_type=f"audio/pcm;rate={SAMPLE_RATE}")
+                        )
+                        await asyncio.sleep(0.001)
+
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    session_active = False
+
+            # ── 2. 수신 태스크 ───────────────────────────────────────────
+            async def receive_jarvis_voice():
+                nonlocal session_active, jarvis_speaking
+                try:
+                    async for response in session.receive():
+                        if not session_active:
+                            break
+
+                        if response.server_content is None:
+                            continue
+
+                        if response.server_content.model_turn:
+                            if not jarvis_speaking:
+                                jarvis_speaking = True
+                                print("\n🔊 자비스: ", end="", flush=True)
+
+                            for part in response.server_content.model_turn.parts:
+                                if part.text:
+                                    print(part.text, end="", flush=True)
+                                    if any(w in part.text for w in ["안녕히 계세요", "종료합니다", "바이바이"]):
+                                        print("\n👋 종료 키워드 감지")
+                                        session_active = False
+
+                                if part.inline_data and part.inline_data.data:
+                                    play_queue.put(part.inline_data.data)
+
+                        # 🔥 [핵심] 자비스의 한 턴 답변이 완전히 끝나면 세션을 종료합니다.
+                        if response.server_content.turn_complete:
+                            # 큐에 쌓인 오디오가 다 재생될 때까지 잠시 대기
+                            while not play_queue.empty():
+                                await asyncio.sleep(0.1)
+                            await asyncio.sleep(0.6)  # 마지막 청크 재생 마진
+                            
+                            jarvis_speaking = False
+                            session_active = False  # 타임아웃 방지를 위해 루프 탈출 (세션 닫기)
+                            print("\n\n👌 대화 완료! 세션을 안전하게 닫고 대기 모드로 전환합니다.")
+
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    session_active = False
+
+            send_task    = asyncio.create_task(send_mic_audio())
+            receive_task = asyncio.create_task(receive_jarvis_voice())
+
+            while session_active:
+                await asyncio.sleep(0.1)
+
+            send_task.cancel()
+            receive_task.cancel()
+            await asyncio.gather(send_task, receive_task, return_exceptions=True)
+
+    except Exception as e:
+        print(f"\n❌ 라이브 세션 오류: {e}")
+    finally:
+        play_queue.put(None)
+        play_thread.join(timeout=1.0)
+        audio_out.stop_stream()
+        audio_out.close()
+        print("🚪 웹소켓 세션이 정상적으로 종료되었습니다.")
+
+
+async def main():
+    pa = pyaudio.PyAudio()
+    stream = pa.open(
+        rate=SAMPLE_RATE, channels=1,
+        format=pyaudio.paInt16,
+        input=True, frames_per_buffer=CHUNK
+    )
+
+    # 대화 모드 관리를 위한 변수
+    last_interaction_time = 0  # 마지막으로 자비스와 대화가 끝난 시간
+
+    print("\n🎤 'Hey Jarvis' 라고 불러서 자비스를 깨워보세요... (종료: Ctrl+C)")
+
+    try:
+        while True:
+            raw   = await asyncio.to_thread(stream.read, CHUNK, exception_on_overflow=False)
+            audio = np.frombuffer(raw, dtype=np.int16)
+
+            prediction = oww_model.predict(audio)
+            score      = prediction.get(WAKEWORD, 0)
+
+            # 🔥 [핵심] 현재 시간이 마지막 대화 종료 후 5분 이내인지 체크
+            current_time = time.time()
+            in_conversation_mode = (current_time - last_interaction_time) < CONV_DURATION
+            
+            # 대화 모드에 따라 유동적으로 감지 문턱값 설정
+            active_threshold = CONV_THRESHOLD if in_conversation_mode else NORMAL_THRESHOLD
+
+            if score > 0.05:
+                mode_str = "🔥 대화모드(민감)" if in_conversation_mode else "💤 일반모드"
+                bar = "█" * int(score * 20)
+                print(f"\r   [{mode_str}] 감지율: {score:.3f} |{bar:<20}| [목표: {active_threshold}]", end="", flush=True)
+
+            if score >= active_threshold:
+                print(f"\n\n🔊 자비스 호출 감지! (점수: {score:.3f})")
+                oww_model.reset()
+                
+                # 대화 세션 진입 (한 턴만 수행하고 나옴)
+                await run_live_chat_session(stream, pa)
+                
+                # 대화가 끝난 시점의 타임스탬프 갱신 -> 이때부터 다시 5분 카운트다운 시작
+                last_interaction_time = time.time()
+                print(f"\n🎤 다음 대기 중... (5분간 민감도 {CONV_THRESHOLD} 유지)")
+
+    except KeyboardInterrupt:
+        print("\n테스트 종료!")
+    finally:
+        stream.stop_stream()
+        stream.close()
+        pa.terminate()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+============================================================
+[26-06-01 15:37] stock_adapter.py (84줄)
+============================================================
+
+import yfinance as yf
+import math
+import requests
+from bs4 import BeautifulSoup
+
+
+def fix_nan(data):
+    if isinstance(data, float) and math.isnan(data): return 0
+    if isinstance(data, dict): return {k: fix_nan(v) for k, v in data.items()}
+    if isinstance(data, list): return [fix_nan(v) for v in data]
+    return data
+
+
+def get_krx_realtime_naver(ticker_code):
+    """네이버 금융에서 실시간 가격 긁어오기 (가입 ❌, 완전 무료 ⭕)"""
+
+    pure_code = ticker_code.split('.')[0]   # '005930.KS' → '005930'
+
+    url = f"https://finance.naver.com/item/main.naver?code={pure_code}"
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+
+    res = requests.get(url, headers=headers, timeout=10)
+    soup = BeautifulSoup(res.text, 'html.parser')
+
+    try:
+        today_p = soup.select_one('.no_today .blind')
+        price = float(today_p.text.replace(',', ''))
+
+        exday_spans  = soup.select('.no_exday .blind')
+        diff         = float(exday_spans[0].text.replace(',', ''))
+        diff_percent = float(exday_spans[1].text.replace(',', '').replace('%', ''))
+
+        exday_html = str(soup.select_one('.no_exday'))
+        if '하락' in exday_html or 'nv01' in exday_html or 'down' in exday_html:
+            diff         = -abs(diff)
+            diff_percent = -abs(diff_percent)
+
+        return {
+            "status": "success",
+            "price": price,
+            "diff": diff,
+            "diff_percent": round(diff_percent, 2)
+        }
+
+    except Exception as e:
+        raise Exception(f"네이버 금융 파싱 에러: {str(e)}")
+
+
+def get_realtime_stock(ticker: str):
+    """티커를 받아서 한국은 네이버로, 미국/코인은 야후로 분기 처리"""
+    try:
+        # 💡 한국 주식(.KS, .KQ)은 네이버 금융 실시간
+        if ticker.endswith(".KS") or ticker.endswith(".KQ"):
+            return fix_nan(get_krx_realtime_naver(ticker))
+
+        # 💡 미국 주식 / 코인은 yfinance
+        stock = yf.Ticker(ticker)
+        hist  = stock.history(period="7d")   # 7d: 주말·공휴일 연속돼도 안전
+
+        if len(hist) < 2:
+            return fix_nan({"status": "error", "message": "데이터 없음"})
+
+        prev_close = float(hist['Close'].iloc[-2])
+
+        current_price = None
+        try:
+            current_price = stock.fast_info.last_price
+        except Exception:
+            pass
+        if not current_price or (isinstance(current_price, float) and math.isnan(current_price)):
+            current_price = float(hist['Close'].iloc[-1])
+
+        diff         = current_price - prev_close
+        diff_percent = (diff / prev_close) * 100 if prev_close else 0
+
+        return fix_nan({
+            "status": "success",
+            "price": round(float(current_price), 2),
+            "diff": round(float(diff), 2),
+            "diff_percent": round(float(diff_percent), 2)
+        })
+
+    except Exception as e:
+        return fix_nan({"status": "error", "message": str(e)})
+
+============================================================
+[26-06-01 00:04] news-app\src\Calendar.jsx (255줄)
+============================================================
+
+import React, { useState, useEffect } from 'react';
+
+export default function Calendar() {
+  // 1. 상태 관리
+  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]); // 현재 선택된 날짜 (YYYY-MM-DD)
+  const [currentMonth, setCurrentMonth] = useState(new Date()); // 달력에 보여줄 '월' 관리
+  const [schedules, setSchedules] = useState([]); // 선택된 날짜의 일정 목록
+  const [newContent, setNewContent] = useState("");
+  const [allMonthSchedules, setAllMonthSchedules] = useState({}); // 달력에 점(마커)을 찍기 위해 '이번 달'의 모든 일정 개수 저장
+  const [dateInputText, setDateInputText] = useState(""); // 상단 텍스트 입력용 (ex: 20260513)
+
+  // -----------------------------------------------------
+  // 💡 [API] 선택한 '날짜'의 상세 일정 가져오기
+  // -----------------------------------------------------
+  const fetchSchedules = () => {
+    fetch(`http://localhost:8000/api/schedule/${selectedDate}`)
+      .then(res => res.json())
+      .then(data => {
+        if(data.status === "success") setSchedules(data.data);
+      })
+      .catch(err => console.error("일정 불러오기 실패:", err));
+  };
+
+  // -----------------------------------------------------
+  // 💡 [API] '이번 달' 전체의 일정 유무 가져오기 (마커 표시용)
+  // -----------------------------------------------------
+  const fetchMonthSchedules = () => {
+    // API에 /api/schedule/month/2026-05 같은 라우트가 아직 없으므로, 
+    // 임시로 그냥 달력 UI를 위해 껍데기만 만들어 둡니다.
+    // (완벽한 표시를 원하시면 파이썬 쪽에 API를 하나 더 파야 합니다. 지금은 빈 객체 유지)
+    setAllMonthSchedules({});
+  };
+
+  // 날짜가 바뀔 때마다 실행
+  useEffect(() => {
+    fetchSchedules();
+    setDateInputText(selectedDate.replace(/-/g, '')); // 2026-05-13 -> 20260513 자동 변경
+    setCurrentMonth(new Date(selectedDate)); // 달력도 선택한 날짜의 달로 이동
+  }, [selectedDate]);
+
+  // 달(Month)이 바뀔 때마다 실행
+  useEffect(() => {
+    fetchMonthSchedules();
+  }, [currentMonth.getMonth(), currentMonth.getFullYear()]);
+
+  // -----------------------------------------------------
+  // 💡 기능: 일정 등록/삭제
+  // -----------------------------------------------------
+  const handleAdd = () => {
+    if(!newContent.trim()) return;
+    fetch("http://localhost:8000/api/schedule", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ date: selectedDate, content: newContent })
+    })
+    .then(() => {
+      setNewContent(""); 
+      fetchSchedules(); 
+      fetchMonthSchedules(); // 등록 후 달력 마커 업데이트
+    });
+  };
+
+  const handleDelete = (id) => {
+    fetch(`http://localhost:8000/api/schedule/${id}`, { method: "DELETE" })
+      .then(() => {
+        fetchSchedules();
+        fetchMonthSchedules(); // 삭제 후 달력 마커 업데이트
+      });
+  };
+
+  // -----------------------------------------------------
+  // 💡 기능: 상단 텍스트로 날짜 검색 (ex: 20260513 치고 엔터)
+  // -----------------------------------------------------
+  const handleDateInputSubmit = () => {
+    if (dateInputText.length === 8) {
+      const year = dateInputText.substring(0, 4);
+      const month = dateInputText.substring(4, 6);
+      const day = dateInputText.substring(6, 8);
+      const formattedDate = `${year}-${month}-${day}`;
+      
+      // 유효한 날짜인지 체크
+      const parsedDate = new Date(formattedDate);
+      if (!isNaN(parsedDate.getTime())) {
+        setSelectedDate(formattedDate);
+      } else {
+        alert("유효하지 않은 날짜입니다.");
+        setDateInputText(selectedDate.replace(/-/g, '')); // 원상복구
+      }
+    } else {
+      alert("YYYYMMDD 형식(8자리 숫자)으로 입력해주세요. (예: 20260513)");
+      setDateInputText(selectedDate.replace(/-/g, '')); // 원상복구
+    }
+  };
+
+
+  // -----------------------------------------------------
+  // 💡 [핵심] 달력 그리기 (이번 달의 날짜 박스들 계산)
+  // -----------------------------------------------------
+  const renderCalendarDays = () => {
+    const year = currentMonth.getFullYear();
+    const month = currentMonth.getMonth(); // 0 ~ 11
+
+    // 이번 달 1일이 무슨 요일인지 (0:일, 1:월, ... 6:토)
+    const firstDay = new Date(year, month, 1).getDay();
+    // 이번 달이 며칠까지 있는지 (28, 29, 30, 31)
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    const days = [];
+    
+    // 1. 1일 이전의 빈 칸(저번 달 날짜 공간) 채우기
+    for (let i = 0; i < firstDay; i++) {
+      days.push(<div key={`empty-${i}`} style={{ padding: '10px', backgroundColor: '#f9f9f9', border: '1px solid #eee' }}></div>);
+    }
+
+    // 2. 실제 날짜 칸 채우기
+    for (let i = 1; i <= daysInMonth; i++) {
+      const dateString = `${year}-${String(month + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
+      const isSelected = dateString === selectedDate;
+      const isToday = dateString === new Date().toISOString().split('T')[0];
+      const hasSchedule = allMonthSchedules[dateString] > 0; // 일정이 있는지 확인 (임시)
+
+      days.push(
+        <div 
+          key={dateString} 
+          onClick={() => setSelectedDate(dateString)}
+          style={{ 
+            padding: '10px 5px', 
+            height: '60px', 
+            border: isSelected ? '2px solid #1a73e8' : '1px solid #eee', 
+            backgroundColor: isSelected ? '#e8f0fe' : (isToday ? '#fff8e1' : 'white'),
+            cursor: 'pointer',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            position: 'relative'
+          }}
+        >
+          {/* 날짜 숫자 */}
+          <span style={{ fontWeight: isSelected || isToday ? 'bold' : 'normal', color: isSelected ? '#1a73e8' : '#202124' }}>
+            {i}
+          </span>
+          {/* 💡 일정 있음 표시 (마커) - 지금은 프론트에서 임시로 작동 */}
+          {(hasSchedule || schedules.length > 0 && isSelected) && (
+            <div style={{ width: '6px', height: '6px', backgroundColor: '#ea4335', borderRadius: '50%', marginTop: '5px' }}></div>
+          )}
+        </div>
+      );
+    }
+
+    // 3. 마지막 날짜 이후의 빈 칸 채우기 (마지막 주 완성)
+    const totalSlots = days.length;
+    const remainingSlots = 7 - (totalSlots % 7);
+    if (remainingSlots < 7) {
+      for (let i = 0; i < remainingSlots; i++) {
+        days.push(<div key={`empty-end-${i}`} style={{ padding: '10px', backgroundColor: '#f9f9f9', border: '1px solid #eee' }}></div>);
+      }
+    }
+
+    return days;
+  };
+
+
+  return (
+    <div style={{ padding: '20px', backgroundColor: 'white', minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+      
+      {/* 💡 상단 컨트롤 패널: YYYYMMDD 입력 검색기 */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', backgroundColor: '#f8f9fa', padding: '15px', borderRadius: '12px', border: '1px solid #ddd' }}>
+        <button 
+          onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))}
+          style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', fontWeight: 'bold', color: '#5f6368' }}
+        >
+          ◀
+        </button>
+        
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <h2 style={{ fontSize: '18px', margin: 0, fontWeight: 'bold' }}>{currentMonth.getFullYear()}년 {currentMonth.getMonth() + 1}월</h2>
+          <span style={{ color: '#ccc' }}>|</span>
+          <input 
+            type="text" 
+            value={dateInputText}
+            onChange={(e) => setDateInputText(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleDateInputSubmit()}
+            placeholder="YYYYMMDD"
+            maxLength={8}
+            style={{ width: '100px', padding: '5px 10px', borderRadius: '5px', border: '1px solid #ccc', textAlign: 'center', fontWeight: 'bold', color: '#1a73e8' }}
+          />
+          <button onClick={handleDateInputSubmit} style={{ padding: '5px 10px', backgroundColor: '#1a73e8', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '12px' }}>이동</button>
+        </div>
+
+        <button 
+          onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))}
+          style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', fontWeight: 'bold', color: '#5f6368' }}
+        >
+          ▶
+        </button>
+      </div>
+
+      {/* 💡 펼쳐진 그리드 탁상 달력 */}
+      <div style={{ marginBottom: '25px', boxShadow: '0 2px 8px rgba(0,0,0,0.05)', borderRadius: '12px', overflow: 'hidden', border: '1px solid #eee' }}>
+        {/* 요일 헤더 */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', backgroundColor: '#f1f3f4', textAlign: 'center', padding: '10px 0', fontWeight: 'bold', fontSize: '14px', borderBottom: '1px solid #ddd' }}>
+          <div style={{ color: '#ea4335' }}>일</div>
+          <div>월</div>
+          <div>화</div>
+          <div>수</div>
+          <div>목</div>
+          <div>금</div>
+          <div style={{ color: '#1a73e8' }}>토</div>
+        </div>
+        {/* 날짜 칸들 (7열 그리드) */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', backgroundColor: 'white' }}>
+          {renderCalendarDays()}
+        </div>
+      </div>
+
+
+      {/* 💡 선택된 날짜의 일정 영역 */}
+      <div style={{ flex: 1, backgroundColor: '#f8f9fa', padding: '15px', borderRadius: '12px', border: '1px solid #eee' }}>
+        <h3 style={{ margin: '0 0 15px 0', fontSize: '16px', color: '#1a73e8' }}>
+          📌 {selectedDate.split('-')[1]}월 {selectedDate.split('-')[2]}일 일정
+        </h3>
+        
+        {/* 일정 추가 입력창 */}
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '15px' }}>
+          <input
+            type="text"
+            value={newContent}
+            onChange={(e) => setNewContent(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
+            placeholder="이 날의 일정을 추가하세요..."
+            style={{ flex: 1, padding: '10px', borderRadius: '6px', border: '1px solid #ccc', fontSize: '14px' }}
+          />
+          <button onClick={handleAdd} style={{ padding: '0 15px', backgroundColor: '#34a853', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>
+            등록
+          </button>
+        </div>
+
+        {/* 일정 리스트 출력 */}
+        <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+          {schedules.length === 0 ? (
+            <li style={{ textAlign: 'center', color: '#999', padding: '20px 0', fontSize: '14px' }}>등록된 일정이 없습니다.</li>
+          ) : (
+            schedules.map(sch => (
+              <li key={sch.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px', backgroundColor: 'white', marginBottom: '8px', borderRadius: '6px', borderLeft: '4px solid #fbbc05', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
+                <span style={{ fontSize: '14px', color: '#202124' }}>{sch.content}</span>
+                <button onClick={() => handleDelete(sch.id)} style={{ color: '#ea4335', background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', padding: '0 5px' }}>✖</button>
+              </li>
+            ))
+          )}
+        </ul>
+      </div>
+
+    </div>
+  );
+}
+
+============================================================
+[26-05-31 23:14] bot_features.py (113줄)
+============================================================
+
+import tkinter as tk
+import threading
+
+from features.weather_feature import WeatherFeature
+from features.timer_alarm_feature import TimerAlarmFeature
+from features.todo_feature import TodoFeature
+from features.screenshot_feature import ScreenshotFeature
+from features.folder_feature import FolderFeature
+from features.stock_feature import StockFeature
+from features.ocr_feature import OcrFeature
+from features.guide_feature import GuideFeature
+
+
+# ---------------------------------------------------------
+# 🤖 AssistantFeatures — 모든 기능 조립
+# ---------------------------------------------------------
+class AssistantFeatures:
+    def __init__(self, root, face_label, show_bubble_func):
+        self.root        = root
+        self.face_label  = face_label
+        self.show_bubble = show_bubble_func
+
+        # ── 기능 모듈 초기화 ──────────────────────────────
+        self.timer_alarm = TimerAlarmFeature(root, face_label, show_bubble_func)
+        self.todo        = TodoFeature(root, show_bubble_func)
+        self.screenshot  = ScreenshotFeature(root, show_bubble_func)
+        self.folder      = FolderFeature(root, show_bubble_func)
+        self.stock       = StockFeature(root, show_bubble_func)
+        self.ocr         = OcrFeature(root, show_bubble_func)
+        self.guide       = GuideFeature(root, show_bubble_func, self.ocr)
+
+        # ── 날씨 위젯 (루트 창에 직접 붙는 UI) ───────────
+        self.weather_label = tk.Label(
+            self.root,
+            text="⛅",
+            font=("Segoe UI Emoji", 14),
+            bg="magenta",
+            fg="black",
+            cursor="hand2"
+        )
+        self.face_label.pack_forget()
+        self.weather_label.pack(side="top", pady=(0, 0))
+        self.face_label.pack(side="bottom")
+
+        self.weather_label.bind("<Button-1>", self._on_weather_click)
+        self.current_weather_briefing = "날씨 정보를 불러오는 중입니다..."
+        self._update_weather()
+
+    # ── 날씨 ─────────────────────────────────────────────
+    def _on_weather_click(self, event):
+        self.show_bubble(self.current_weather_briefing, "WEATHER", 20000, True)
+
+    def _update_weather(self):
+        def fetch():
+            icon, briefing = WeatherFeature.get_weather_briefing("서울")
+            self.current_weather_briefing = briefing
+            self.root.after(0, lambda: self.weather_label.config(text=icon))
+            self.root.after(1800000, self._update_weather)
+        threading.Thread(target=fetch, daemon=True).start()
+
+    # ── 타이머 & 알람 (위임) ─────────────────────────────
+    def start_timer(self, minutes):
+        self.timer_alarm.start_timer(minutes)
+
+    def stop_timer(self):
+        self.timer_alarm.stop_timer()
+
+    def set_alarm(self):
+        self.timer_alarm.set_alarm()
+
+    def check_alarm(self):
+        self.timer_alarm.check_alarm()
+
+    def show_giant_alert(self, title, message):
+        self.timer_alarm.show_giant_alert(title, message)
+
+    # ── 할 일 (위임) ─────────────────────────────────────
+    def toggle_todo_bubbles(self):
+        self.todo.toggle_todo_bubbles()
+
+    def update_todo_position(self):
+        self.todo.update_todo_position()
+
+    # ── 스크린샷 (위임) ──────────────────────────────────
+    def start_screenshot(self):
+        self.screenshot.start_screenshot()
+
+    # ── 퀵 폴더 (위임) ───────────────────────────────────
+    def toggle_folder_bubbles(self):
+        self.folder.toggle_folder_bubbles()
+
+    def update_folder_position(self):
+        self.folder.update_folder_position()
+
+    # ── 주식 (위임) ──────────────────────────────────────
+    def toggle_stock_bubbles(self):
+        self.stock.toggle_stock_bubbles()
+
+    def update_stock_position(self):
+        self.stock.update_stock_position()
+
+    # ── 가이드 & OCR (위임) ──────────────────────────────
+    def start_guide_mode(self):
+        self.guide.start_guide_mode()
+
+    def kill_all_tracking(self):
+        self.ocr.kill_all_tracking()
+
+    def start_tracking_target(self, text_widget):
+        self.ocr.start_tracking_target(text_widget)
+
+    def start_tracking_target_by_word(self, target_text):
+        self.ocr.start_tracking_target_by_word(target_text)

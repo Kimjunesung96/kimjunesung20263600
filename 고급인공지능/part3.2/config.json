@@ -1,0 +1,17 @@
+{
+    "alarm_interval": 1,
+    "enabled_categories": [
+        "01",
+        "02",
+        "03",
+        "04",
+        "05",
+        "06",
+        "07",
+        "08"
+    ],
+    "bubble_duration": 10,
+    "news_count": 10,
+    "custom_keyword": "선거",
+    "gemini_api_key": "여기에_API키를_입력하세요"
+}

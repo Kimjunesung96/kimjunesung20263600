@@ -1,0 +1,976 @@
+
+
+============================================================
+[26-05-31 23:05] features\screenshot_feature.py (151줄)
+============================================================
+
+import tkinter as tk
+import datetime
+import os
+import base64
+from io import BytesIO
+
+
+# ---------------------------------------------------------
+# 📸 스크린샷 & 클립보드 복사 기능
+# ---------------------------------------------------------
+class ScreenshotFeature:
+    def __init__(self, root, show_bubble_func):
+        self.root        = root
+        self.show_bubble = show_bubble_func
+
+        self.overlay = None
+        self.canvas  = None
+        self.rect    = None
+        self.start_x = 0
+        self.start_y = 0
+
+    # ---------------------------------------------------------
+    # DPI 배율 감지
+    # ---------------------------------------------------------
+    def _get_dpi_scale(self):
+        try:
+            import ctypes
+            hwnd = self.root.winfo_id()
+            dpi  = ctypes.windll.user32.GetDpiForWindow(hwnd)
+            return dpi / 96.0
+        except Exception:
+            return 1.0
+
+    # ---------------------------------------------------------
+    # 영역 선택 오버레이 시작
+    # ---------------------------------------------------------
+    def start_screenshot(self):
+        self.overlay = tk.Toplevel(self.root)
+        self.overlay.attributes("-topmost", True)
+        self.overlay.attributes("-alpha", 0.3)
+        self.overlay.configure(bg="black")
+
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        self.overlay.geometry(f"{sw}x{sh}+0+0")
+        self.overlay.attributes("-fullscreen", True)
+        self.overlay.config(cursor="cross")
+
+        self.canvas = tk.Canvas(self.overlay, bg="black", highlightthickness=0)
+        self.canvas.pack(fill="both", expand=True)
+
+        self.rect    = None
+        self.start_x = 0
+        self.start_y = 0
+
+        self.canvas.bind("<ButtonPress-1>",   self.on_screen_press)
+        self.canvas.bind("<B1-Motion>",        self.on_screen_drag)
+        self.canvas.bind("<ButtonRelease-1>",  self.on_screen_release)
+        self.overlay.bind("<Escape>", lambda e: self.overlay.destroy())
+
+    def on_screen_press(self, event):
+        self.start_x = event.x_root
+        self.start_y = event.y_root
+        self.rect = self.canvas.create_rectangle(
+            event.x, event.y, event.x, event.y,
+            outline="red", width=2, fill=""
+        )
+
+    def on_screen_drag(self, event):
+        self.canvas.coords(
+            self.rect,
+            self.start_x - self.overlay.winfo_rootx(),
+            self.start_y - self.overlay.winfo_rooty(),
+            event.x, event.y
+        )
+
+    def on_screen_release(self, event):
+        end_x = event.x_root
+        end_y = event.y_root
+        self.overlay.destroy()
+
+        if abs(end_x - self.start_x) < 10 or abs(end_y - self.start_y) < 10:
+            self.show_bubble("영역이 너무 작아 캡처가 취소되었습니다.", "ALARM", 2000, True)
+            return
+
+        self.root.after(
+            200,
+            lambda: self._capture_and_copy(self.start_x, self.start_y, end_x, end_y)
+        )
+
+    # ---------------------------------------------------------
+    # 캡처 → 클립보드 + 파일 + 서버 저장
+    # ---------------------------------------------------------
+    def _capture_and_copy(self, x1, y1, x2, y2):
+        try:
+            import mss
+            from PIL import Image
+            import win32clipboard
+            import requests
+        except ImportError:
+            self.show_bubble(
+                "📸 [오류]\n터미널에서 mss, pillow를 설치해주세요!",
+                "ALARM", 5000, True
+            )
+            return
+
+        left   = min(x1, x2)
+        top    = min(y1, y2)
+        width  = abs(x2 - x1)
+        height = abs(y2 - y1)
+        monitor = {"top": top, "left": left, "width": width, "height": height}
+
+        with mss.mss() as sct:
+            sct_img = sct.grab(monitor)
+            img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
+
+        # 파일 저장
+        save_dir = "screenshots"
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+        filename = f"capture_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        filepath = os.path.join(save_dir, filename)
+        img.save(filepath, "PNG")
+
+        # 클립보드 저장
+        output = BytesIO()
+        img.convert("RGB").save(output, "BMP")
+        data = output.getvalue()[14:]
+        output.close()
+
+        win32clipboard.OpenClipboard()
+        win32clipboard.EmptyClipboard()
+        win32clipboard.SetClipboardData(win32clipboard.CF_DIB, data)
+        win32clipboard.CloseClipboard()
+
+        # 서버 전송
+        try:
+            img_buffer = BytesIO()
+            img.save(img_buffer, format="PNG")
+            img_base64  = base64.b64encode(img_buffer.getvalue()).decode("utf-8")
+            base64_str  = f"data:image/png;base64,{img_base64}"
+            response    = requests.post(
+                "http://localhost:8000/api/clipboard",
+                json={"type": "image", "content": base64_str}
+            )
+            if response.status_code == 200:
+                self.show_bubble("📸 찰칵!\n클립보드, 파일, 서버에 모두 저장됨!", "ALARM", 4000, True)
+            else:
+                self.show_bubble(f"📸 찰칵!\nDB 저장 실패: {response.status_code}", "ALARM", 4000, True)
+        except Exception:
+            self.show_bubble("📸 찰칵!\n서버가 꺼져있거나 오류가 났습니다.", "ALARM", 4000, True)
+
+============================================================
+[26-05-31 23:02] features\todo_feature.py (105줄)
+============================================================
+
+import tkinter as tk
+import sqlite3
+import datetime
+
+
+# ---------------------------------------------------------
+# 📅 할 일 타워 기능
+# ---------------------------------------------------------
+class TodoFeature:
+    def __init__(self, root, show_bubble_func):
+        self.root        = root
+        self.show_bubble = show_bubble_func
+        self.todo_win    = None
+
+    # ---------------------------------------------------------
+    # DB 조회
+    # ---------------------------------------------------------
+    def get_today_schedules(self):
+        try:
+            conn = sqlite3.connect('news.db')
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+            cursor.execute(
+                "SELECT id, content FROM schedule WHERE date = ? ORDER BY id ASC",
+                (today_str,)
+            )
+            rows = [dict(row) for row in cursor.fetchall()]
+            conn.close()
+            return rows
+        except Exception:
+            return []
+
+    # ---------------------------------------------------------
+    # 토글
+    # ---------------------------------------------------------
+    def toggle_todo_bubbles(self):
+        if self.todo_win and self.todo_win.winfo_exists():
+            self.todo_win.destroy()
+            self.todo_win = None
+        else:
+            self.draw_todo_bubbles()
+
+    # ---------------------------------------------------------
+    # 버블 그리기
+    # ---------------------------------------------------------
+    def draw_todo_bubbles(self):
+        if self.todo_win and self.todo_win.winfo_exists():
+            self.todo_win.destroy()
+
+        items = self.get_today_schedules()
+        if not items:
+            self.show_bubble("오늘 등록된 일정이 없습니다! ☕", "ALARM", 3000, True)
+            return
+
+        self.todo_win = tk.Toplevel(self.root)
+        self.todo_win.overrideredirect(True)
+        self.todo_win.attributes("-topmost", True)
+        self.todo_win.configure(bg='#202124')
+
+        container = tk.Frame(
+            self.todo_win, bg='#202124',
+            padx=15, pady=15, relief="ridge", bd=2
+        )
+        container.pack()
+
+        tk.Label(
+            container, text="📅 오늘 할 일",
+            bg='#202124', fg="white",
+            font=("맑은 고딕", 10, "bold")
+        ).pack(side="top", pady=(0, 10))
+
+        def mark_done(event, lbl):
+            if lbl.cget("bg") != "#1a73e8":
+                lbl.config(bg="#1a73e8", fg="white",
+                           text=lbl.cget("text") + " (✔완료)")
+
+        for item in reversed(items):
+            lbl = tk.Label(
+                container,
+                text=f"📌 {item['content']}",
+                bg="#3c4043", fg="white",
+                font=("맑은 고딕", 10),
+                relief="flat", padx=12, pady=6,
+                cursor="hand2", anchor="w"
+            )
+            lbl.pack(side="bottom", pady=2, fill="x")
+            lbl.bind("<Button-1>", lambda e, l=lbl: mark_done(e, l))
+
+        self.todo_win.update_idletasks()
+        self.update_todo_position()
+
+    # ---------------------------------------------------------
+    # 위치 갱신 (로봇 위에 붙이기)
+    # ---------------------------------------------------------
+    def update_todo_position(self):
+        if self.todo_win and self.todo_win.winfo_exists():
+            rx  = self.root.winfo_x()
+            ry  = self.root.winfo_y()
+            rw  = self.root.winfo_width()
+            tw  = self.todo_win.winfo_reqwidth()
+            th  = self.todo_win.winfo_reqheight()
+            tx  = rx + (rw // 2) - (tw // 2)
+            ty  = ry - th - 5
+            self.todo_win.geometry(f"+{tx}+{ty}")
+
+============================================================
+[26-05-31 23:02] features\timer_alarm_feature.py (112줄)
+============================================================
+
+import tkinter as tk
+import datetime
+from tkinter import simpledialog
+
+
+# ---------------------------------------------------------
+# ⏳ 타이머 & 알람 기능
+# ---------------------------------------------------------
+class TimerAlarmFeature:
+    def __init__(self, root, face_label, show_bubble_func):
+        self.root       = root
+        self.face_label = face_label
+        self.show_bubble = show_bubble_func
+
+        self.timer_seconds    = 0
+        self.is_timer_running = False
+        self.target_alarm_time = ""
+
+    # ---------------------------------------------------------
+    # ⏳ 타이머
+    # ---------------------------------------------------------
+    def start_timer(self, minutes):
+        self.timer_seconds    = minutes * 60
+        self.is_timer_running = True
+        self.update_timer()
+
+    def stop_timer(self):
+        self.is_timer_running = False
+        self.face_label.config(text="🤖", font=("Arial", 45))
+
+    def update_timer(self):
+        if self.timer_seconds > 0 and self.is_timer_running:
+            mins, secs = divmod(self.timer_seconds, 60)
+            self.face_label.config(
+                text=f"⏳\n{mins:02d}:{secs:02d}",
+                font=("Arial", 20, "bold")
+            )
+            self.timer_seconds -= 1
+            self.root.after(1000, self.update_timer)
+
+        elif self.is_timer_running and self.timer_seconds <= 0:
+            self.is_timer_running = False
+            self.face_label.config(text="🚨", font=("Arial", 45))
+            self.show_giant_alert("⏳ 타이머 종료!", "지정하신 타이머 시간이 다 되었습니다!")
+
+    # ---------------------------------------------------------
+    # ⏰ 알람
+    # ---------------------------------------------------------
+    def set_alarm(self):
+        time_str = simpledialog.askstring(
+            "알람 설정",
+            "알람 시간을 입력하세요\n(예: 08:30, 14:00)"
+        )
+        if time_str:
+            self.target_alarm_time = time_str.strip()
+            self.show_bubble(
+                f"오늘 {self.target_alarm_time}에 알람이 설정되었습니다!",
+                "ALARM", 3000, True
+            )
+
+    def check_alarm(self):
+        if self.target_alarm_time:
+            now_str = datetime.datetime.now().strftime("%H:%M")
+            if now_str == self.target_alarm_time:
+                self.show_bubble(
+                    "⏰ 띠링! 설정하신 알람 시간입니다!\n좋은 하루 보내세요!",
+                    "ALARM", 10000, False
+                )
+                self.target_alarm_time = ""
+
+    # ---------------------------------------------------------
+    # 🚨 전체화면 긴급 알림창
+    # ---------------------------------------------------------
+    def show_giant_alert(self, title, message):
+        alert_win = tk.Toplevel(self.root)
+        alert_win.attributes("-topmost", True)
+        alert_win.overrideredirect(True)
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        alert_win.geometry(f"{sw}x{sh}+0+0")
+        alert_win.configure(bg="black")
+        alert_win.attributes("-alpha", 0.85)
+
+        def click_to_reset(event):
+            alert_win.destroy()
+            self.face_label.config(text="🤖", font=("Arial", 45))
+
+        alert_win.bind("<Button-1>", click_to_reset)
+
+        frame = tk.Frame(
+            alert_win, bg="#ffeb3b", bd=10,
+            relief="ridge", padx=50, pady=50
+        )
+        frame.place(relx=0.5, rely=0.5, anchor="center")
+
+        tk.Label(
+            frame, text=title,
+            font=("맑은 고딕", 60, "bold"),
+            bg="#ffeb3b", fg="#d32f2f"
+        ).pack(pady=(0, 20))
+
+        tk.Label(
+            frame, text=message,
+            font=("맑은 고딕", 25, "bold"),
+            bg="#ffeb3b", fg="black"
+        ).pack(pady=(0, 40))
+
+        tk.Label(
+            frame, text="(🚨 한번 클릭하면 원상태로 복귀합니다)",
+            font=("맑은 고딕", 12, "bold"),
+            bg="#ffeb3b", fg="#5f6368"
+        ).pack()
+
+============================================================
+[26-05-31 22:59] features\weather_feature.py (84줄)
+============================================================
+
+import requests
+from datetime import datetime
+
+
+# ---------------------------------------------------------
+# ⛅ 날씨 엔진
+# ---------------------------------------------------------
+class WeatherFeature:
+    WMO_MAP = {
+        0:  ("☀️",  "맑음"),
+        1:  ("🌤️", "대체로 맑음"),
+        2:  ("⛅",  "구름조금"),
+        3:  ("☁️",  "흐림"),
+        45: ("🌫️", "안개"),
+        48: ("🌫️", "안개"),
+        51: ("🌧️", "가벼운 이슬비"),
+        53: ("🌧️", "이슬비"),
+        55: ("🌧️", "강한 이슬비"),
+        61: ("☔",  "가벼운 비"),
+        63: ("☔",  "비"),
+        65: ("☔",  "강한 비"),
+        71: ("❄️",  "가벼운 눈"),
+        73: ("❄️",  "눈"),
+        75: ("❄️",  "강한 눈"),
+        95: ("⛈️",  "천둥번개"),
+    }
+
+    @staticmethod
+    def get_weather_briefing(location="서울"):
+        try:
+            url = (
+                "https://api.open-meteo.com/v1/forecast"
+                "?latitude=37.566&longitude=126.978"
+                "&current_weather=true"
+                "&hourly=temperature_2m,precipitation_probability,weathercode"
+                "&timezone=Asia%2FSeoul"
+            )
+            data = requests.get(url, timeout=5).json()
+
+            cur      = data.get("current_weather", {})
+            cur_temp = cur.get("temperature", 0)
+            cur_code = cur.get("weathercode", 0)
+
+            now_hour = datetime.now().hour
+            hours    = data["hourly"]["time"]
+            temps    = data["hourly"]["temperature_2m"]
+            codes    = data["hourly"]["weathercode"]
+            rains    = data["hourly"]["precipitation_probability"]
+
+            # 현재 시간 강수 확률
+            cur_rain = 0
+            for i, t in enumerate(hours):
+                if int(t[11:13]) == now_hour:
+                    cur_rain = rains[i]
+                    break
+
+            icon, status = WeatherFeature.WMO_MAP.get(cur_code, ("⛅", "알 수 없음"))
+            briefing_text = f"🌡 현재 {location}: {status} {cur_temp}°C (강수 {cur_rain}%)\n\n"
+            will_rain = cur_rain >= 40 or "비" in status or "눈" in status or "소나기" in status
+
+            count = 0
+            for i, t in enumerate(hours):
+                h = int(t[11:13])
+                if h <= now_hour:
+                    continue
+
+                wicon, wstatus = WeatherFeature.WMO_MAP.get(codes[i], ("⛅", "?"))
+                briefing_text += f"▪ {h}시: {round(temps[i])}°C {wicon} {wstatus} (강수 {rains[i]}%)\n"
+
+                if rains[i] >= 40 or "비" in wstatus or "눈" in wstatus:
+                    will_rain = True
+
+                count += 1
+                if count >= 6:
+                    break
+
+            if will_rain:
+                icon = "☔"
+                briefing_text += "\n💡 비/눈 올 가능성 있어요! 우산 챙기세요!"
+
+            return icon, briefing_text
+
+        except Exception:
+            return "⛅", "날씨 정보를 불러오지 못했습니다."
+
+============================================================
+[26-05-31 21:37] news-app\src\App.jsx (173줄)
+============================================================
+
+import { useState, useEffect, useRef } from 'react';
+import Calendar from './Calendar';
+import Clipboard from './Clipboard';
+import NewsTab from './components/NewsTab';
+import StockTab from './components/StockTab';
+import SettingsTab from './components/SettingsTab';
+
+export default function App() {
+  const [currentMenu, setCurrentMenu] = useState('home');
+  const [homeMode, setHomeMode] = useState('news');
+
+  // 뉴스 탭 상태
+  const [activeTab, setActiveTab] = useState('01');
+  const [searchKeyword, setSearchKeyword] = useState('');
+
+  // 설정 상태
+  const [alarmInterval, setAlarmInterval] = useState(10);
+  const [enabledCategories, setEnabledCategories] = useState(['01', '02', '03']);
+  const [bubbleDuration, setBubbleDuration] = useState(5);
+  const [newsCount, setNewsCount] = useState(10);
+
+  // 주식 상태
+  const [favoriteStocks, setFavoriteStocks] = useState([]);
+
+  const alarmIntervalRef = useRef(alarmInterval);
+  useEffect(() => { alarmIntervalRef.current = alarmInterval; }, [alarmInterval]);
+
+  // 초기 설정 + 주식 목록 로드
+  useEffect(() => {
+    fetch('http://localhost:8000/api/settings')
+      .then(res => res.json())
+      .then(data => {
+        if (data.alarm_interval)       setAlarmInterval(data.alarm_interval);
+        if (data.enabled_categories)   setEnabledCategories(data.enabled_categories);
+        if (data.bubble_duration != null) setBubbleDuration(data.bubble_duration);
+        if (data.news_count      != null) setNewsCount(data.news_count);
+      });
+    fetchStocks();
+  }, []);
+
+  // URL 쿼리 파라미터로 검색어 처리
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const query = params.get('search');
+    if (query) {
+      setSearchKeyword(query);
+      setActiveTab('search');
+      setHomeMode('news');
+    }
+  }, []);
+
+  const fetchStocks = () => {
+    fetch('http://localhost:8000/api/favorites')
+      .then(res => res.json())
+      .then(data => {
+        if (data.status === 'success') setFavoriteStocks(data.data);
+      });
+  };
+
+  // 설정 저장
+  const saveAllSettings = (interval, categories, duration, count) => {
+    fetch('http://localhost:8000/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        alarm_interval: interval,
+        enabled_categories: categories,
+        bubble_duration: parseInt(duration) || 0,
+        news_count: parseInt(count) || 0,
+      }),
+    });
+  };
+
+  const handleIntervalChange = (val) => {
+    const parsed = parseInt(val);
+    setAlarmInterval(parsed);
+    alarmIntervalRef.current = parsed;
+    saveAllSettings(parsed, enabledCategories, bubbleDuration, newsCount);
+  };
+  const handleCategoryToggle = (id) => {
+    const next = enabledCategories.includes(id)
+      ? enabledCategories.filter(c => c !== id)
+      : [...enabledCategories, id];
+    if (next.length === 0) return;
+    setEnabledCategories(next);
+    saveAllSettings(alarmInterval, next, bubbleDuration, newsCount);
+  };
+  const handleDurationChange = (val) => {
+    setBubbleDuration(val);
+    saveAllSettings(alarmInterval, enabledCategories, val, newsCount);
+  };
+  const handleCountChange = (val) => {
+    setNewsCount(val);
+    saveAllSettings(alarmInterval, enabledCategories, bubbleDuration, val);
+  };
+
+  // 주식 종목 삭제 시 activeStock 초기화는 StockTab 내부에서 처리
+  const handleStocksChange = () => fetchStocks();
+
+  return (
+    <div style={{ maxWidth: '500px', margin: '0 auto', backgroundColor: '#f5f5f5', minHeight: '100vh', display: 'flex', flexDirection: 'column', fontFamily: "'맑은 고딕', sans-serif" }}>
+
+      {/* 헤더 */}
+      <div style={{ backgroundColor: '#1a73e8', color: 'white', paddingTop: '15px', textAlign: 'center', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+        <h1 style={{ margin: 0, fontSize: '1.5rem', marginBottom: '4px' }}>AI 뉴스 큐레이터</h1>
+        <p style={{ margin: '0 0 0 0', fontSize: '0.8rem', opacity: 0.8 }}>실시간 주요 뉴스 브리핑</p>
+
+        {currentMenu === 'home' && (
+          <div style={{ display: 'flex', padding: '0 15px', marginTop: '10px' }}>
+            <div onClick={() => setHomeMode('news')}
+              style={{ flex: 1, padding: '10px 0', fontWeight: 'bold', cursor: 'pointer', borderBottom: homeMode === 'news' ? '3px solid white' : '3px solid transparent', color: homeMode === 'news' ? 'white' : 'rgba(255,255,255,0.6)', transition: 'all 0.2s' }}>
+              📰 주요 뉴스
+            </div>
+            <div onClick={() => { setHomeMode('stock'); setSearchKeyword(''); }}
+              style={{ flex: 1, padding: '10px 0', fontWeight: 'bold', cursor: 'pointer', borderBottom: homeMode === 'stock' ? '3px solid white' : '3px solid transparent', color: homeMode === 'stock' ? 'white' : 'rgba(255,255,255,0.6)', transition: 'all 0.2s' }}>
+              📈 관심 주식
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 홈 - 뉴스 / 주식 */}
+      {currentMenu === 'home' && homeMode === 'news' && (
+        <NewsTab
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          searchKeyword={searchKeyword}
+          setSearchKeyword={setSearchKeyword}
+          enabledCategories={enabledCategories}
+          alarmInterval={alarmInterval}
+          currentMenu={currentMenu}
+        />
+      )}
+      {currentMenu === 'home' && homeMode === 'stock' && (
+        <StockTab
+          favoriteStocks={favoriteStocks}
+          currentMenu={currentMenu}
+        />
+      )}
+
+      {/* 달력 / 클립보드 */}
+      {currentMenu === 'calendar'  && <div style={{ flex: 1 }}><Calendar /></div>}
+      {currentMenu === 'clipboard' && <div style={{ flex: 1, overflowY: 'auto' }}><Clipboard /></div>}
+
+      {/* 설정 */}
+      {currentMenu === 'settings' && (
+        <SettingsTab
+          alarmInterval={alarmInterval}     onIntervalChange={handleIntervalChange}
+          enabledCategories={enabledCategories} onCategoryToggle={handleCategoryToggle}
+          bubbleDuration={bubbleDuration}   onDurationChange={handleDurationChange}
+          newsCount={newsCount}             onCountChange={handleCountChange}
+          favoriteStocks={favoriteStocks}   onStocksChange={handleStocksChange}
+        />
+      )}
+
+      {/* 하단 네비게이션 */}
+      <div style={{ display: 'flex', borderTop: '1px solid #ddd', backgroundColor: 'white', position: 'sticky', bottom: 0, padding: '5px 0', flexShrink: 0 }}>
+        {[
+          { key: 'home',      icon: '🏠', label: '홈' },
+          { key: 'calendar',  icon: '📅', label: '달력' },
+          { key: 'clipboard', icon: '📋', label: '클립보드' },
+          { key: 'settings',  icon: '⚙️', label: '설정' },
+        ].map(({ key, icon, label }) => (
+          <div key={key} onClick={() => setCurrentMenu(key)}
+            style={{ flex: 1, textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', color: currentMenu === key ? '#1a73e8' : '#9aa0a6', cursor: 'pointer' }}>
+            <span style={{ fontSize: '20px' }}>{icon}</span>
+            <span style={{ fontSize: '11px', fontWeight: currentMenu === key ? 'bold' : 'normal' }}>{label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+============================================================
+[26-05-31 21:35] news-app\src\components\SettingsTab.jsx (152줄)
+============================================================
+
+import { useState } from 'react';
+
+const ALL_CATEGORIES = [
+  { id: '01', name: 'IT/테크' }, { id: '02', name: '경제' },
+  { id: '03', name: '사회' },   { id: '04', name: '세계' },
+  { id: '05', name: '연예' },   { id: '06', name: '스포츠' },
+  { id: '07', name: '과학' },   { id: '08', name: '건강' },
+];
+
+export default function SettingsTab({
+  alarmInterval, onIntervalChange,
+  enabledCategories, onCategoryToggle,
+  bubbleDuration, onDurationChange,
+  newsCount, onCountChange,
+  favoriteStocks, onStocksChange,
+}) {
+  const [newStockName, setNewStockName] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+
+  const handleSearchChange = (val) => {
+    setNewStockName(val);
+    if (!val.trim()) { setSearchResults([]); return; }
+    fetch(`http://localhost:8000/api/search_stock?name=${encodeURIComponent(val)}`)
+      .then(res => res.json())
+      .then(data => { if (data.status === 'success') setSearchResults(data.data); })
+      .catch(() => setSearchResults([]));
+  };
+
+  const handleSelectAndAdd = (stockName, stockTicker) => {
+    setNewStockName('');
+    setSearchResults([]);
+    handleAddStock(stockName, stockTicker);
+  };
+
+  const handleAddStock = (targetName = newStockName, targetTicker = '') => {
+    if (!targetName.trim()) return alert('종목명을 입력해주세요!');
+    const btn = document.getElementById('addStockBtn');
+    if (btn) { btn.innerText = '추가 중...'; btn.disabled = true; }
+    fetch('http://localhost:8000/api/favorites', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: targetName.trim(), ticker: targetTicker }),
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.status === 'success') {
+          setNewStockName('');
+          setSearchResults([]);
+          onStocksChange();
+        } else {
+          alert('❌ ' + data.message);
+        }
+      })
+      .finally(() => { if (btn) { btn.innerText = '추가'; btn.disabled = false; } });
+  };
+
+  const handleDeleteStock = (id) => {
+    if (window.confirm('이 종목을 삭제할까요?')) {
+      fetch(`http://localhost:8000/api/favorites/${id}`, { method: 'DELETE' })
+        .then(() => onStocksChange(id));
+    }
+  };
+
+  return (
+    <div style={{ flex: 1, padding: '20px', overflowY: 'auto' }}>
+
+      {/* 시스템 설정 */}
+      <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '15px', boxShadow: '0 2px 8px rgba(0,0,0,0.05)', marginBottom: '20px' }}>
+        <h2 style={{ margin: '0 0 20px 0', fontSize: '1.2rem', color: '#1a73e8' }}>⚙️ 시스템 설정</h2>
+
+        <p style={{ fontWeight: 'bold', marginBottom: '10px' }}>🔔 알람 브리핑 주기</p>
+        <select value={alarmInterval} onChange={(e) => onIntervalChange(e.target.value)}
+          style={{ padding: '10px', width: '100%', borderRadius: '8px', border: '1px solid #ddd', fontSize: '1rem', marginBottom: '25px' }}>
+          <option value={1}>1분마다 (테스트)</option>
+          <option value={5}>5분마다</option>
+          <option value={10}>10분마다 (기본)</option>
+          <option value={30}>30분마다</option>
+          <option value={60}>1시간마다</option>
+        </select>
+
+        <p style={{ fontWeight: 'bold', marginBottom: '10px' }}>📰 관심 분야 선택</p>
+        <div style={{ display: 'flex', overflowX: 'auto', gap: '12px', marginBottom: '25px', paddingBottom: '10px', whiteSpace: 'nowrap' }}>
+          {ALL_CATEGORIES.map(cat => (
+            <label key={cat.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 15px', backgroundColor: '#f8f9fa', borderRadius: '8px', cursor: 'pointer', flexShrink: 0 }}>
+              <input type="checkbox" checked={enabledCategories.includes(cat.id)} onChange={() => onCategoryToggle(cat.id)}
+                style={{ width: '18px', height: '18px' }} />
+              <span style={{ fontSize: '0.9rem' }}>{cat.name}</span>
+            </label>
+          ))}
+        </div>
+
+        <div style={{ borderTop: '1px solid #eee', paddingTop: '20px' }}>
+          <p style={{ fontWeight: 'bold', marginBottom: '10px' }}>⏱️ 말풍선 유지 시간 (초)</p>
+          <input type="number" value={bubbleDuration} onChange={(e) => onDurationChange(e.target.value)}
+            style={{ padding: '10px', width: '100%', borderRadius: '8px', border: '1px solid #ddd', marginBottom: '20px' }} />
+
+          <p style={{ fontWeight: 'bold', marginBottom: '10px' }}>🔢 브리핑 뉴스 개수 (0은 무한)</p>
+          <input type="number" value={newsCount} onChange={(e) => onCountChange(e.target.value)}
+            style={{ padding: '10px', width: '100%', borderRadius: '8px', border: '1px solid #ddd' }} />
+        </div>
+      </div>
+
+      {/* 관심 주식 관리 */}
+      <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '15px', boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
+        <h2 style={{ margin: '0 0 20px 0', fontSize: '1.2rem', color: '#34a853' }}>📈 관심 주식 종목 관리</h2>
+
+        <div style={{ marginBottom: '15px' }}>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <input type="text" placeholder="종목명 입력 (예: 삼성전자, 애플)"
+              value={newStockName} onChange={e => handleSearchChange(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleAddStock()}
+              style={{ flex: 1, padding: '10px', borderRadius: '6px', border: '1px solid #ddd' }} />
+            <button id="addStockBtn" onClick={() => handleAddStock(newStockName)}
+              style={{ padding: '0 15px', backgroundColor: '#34a853', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>
+              추가
+            </button>
+          </div>
+
+          {searchResults.length > 0 && (
+            <ul style={{ backgroundColor: 'white', border: '1px solid #ddd', borderRadius: '6px', marginTop: '4px', padding: 0, listStyle: 'none', maxHeight: '150px', overflowY: 'auto', boxShadow: '0 4px 6px rgba(0,0,0,0.1)' }}>
+              {searchResults.map((stock, idx) => (
+                <li key={idx} onClick={() => handleSelectAndAdd(stock.name, stock.ticker)}
+                  style={{ padding: '10px 15px', borderBottom: '1px solid #eee', cursor: 'pointer', fontSize: '0.9rem', color: '#333' }}>
+                  <span style={{ fontWeight: 'bold', color: '#1a73e8' }}>{stock.name}</span>{' '}
+                  <span style={{ fontSize: '0.8rem', color: '#888' }}>({stock.ticker})</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+          {favoriteStocks.map(stock => (
+            <li key={stock.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px', borderBottom: '1px solid #eee' }}>
+              <span>
+                <strong>{stock.name}</strong>{' '}
+                <span style={{ color: '#888', fontSize: '0.85rem' }}>({stock.ticker})</span>
+              </span>
+              <button onClick={() => handleDeleteStock(stock.id)}
+                style={{ color: '#ea4335', background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.9rem' }}>
+                ✖ 삭제
+              </button>
+            </li>
+          ))}
+          {favoriteStocks.length === 0 && (
+            <li style={{ textAlign: 'center', color: '#999', padding: '15px' }}>등록된 종목이 없습니다.</li>
+          )}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+============================================================
+[26-05-31 21:34] news-app\src\components\StockTab.jsx (163줄)
+============================================================
+
+import { useState, useEffect, useCallback, useRef } from 'react';
+
+const ALL_CATEGORIES = [
+  { id: '01', name: 'IT/테크' }, { id: '02', name: '경제' },
+  { id: '03', name: '사회' },   { id: '04', name: '세계' },
+  { id: '05', name: '연예' },   { id: '06', name: '스포츠' },
+  { id: '07', name: '과학' },   { id: '08', name: '건강' },
+];
+
+export default function StockTab({ favoriteStocks, currentMenu }) {
+  const [activeStock, setActiveStock] = useState(null);
+  const [stockDetail, setStockDetail] = useState(null);
+  const [newsList, setNewsList] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState(null);
+
+  // 첫 번째 종목 자동 선택
+  useEffect(() => {
+    if (!activeStock && favoriteStocks.length > 0) {
+      setActiveStock(favoriteStocks[0]);
+    }
+  }, [favoriteStocks]);
+
+  const fetchStockData = useCallback((isBackground = false) => {
+    if (!activeStock?.ticker) return;
+    if (!isBackground) {
+      setIsLoading(true);
+      setStockDetail(null);
+      setNewsList([]);
+    }
+
+    fetch(`http://localhost:8000/api/stock/${activeStock.ticker}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.status === 'success') setStockDetail(data);
+        else if (!isBackground) setStockDetail(null);
+      })
+      .catch(() => { if (!isBackground) setStockDetail(null); });
+
+    fetch(`http://localhost:8000/api/search?q=${encodeURIComponent(activeStock.name)}&limit=30&offset=0`)
+      .then(res => res.json())
+      .then(result => {
+        if (result.status === 'success') {
+          setNewsList(result.data);
+          setLastUpdated(new Date());
+        }
+        if (!isBackground) setIsLoading(false);
+      })
+      .catch(() => { if (!isBackground) setIsLoading(false); });
+  }, [activeStock]);
+
+  // 종목 바뀌거나 탭 돌아올 때 갱신
+  useEffect(() => {
+    if (currentMenu !== 'home' || !activeStock?.ticker) return;
+    fetchStockData(false);
+    const intervalId = setInterval(() => fetchStockData(true), 30 * 1000);
+    return () => clearInterval(intervalId);
+  }, [activeStock, currentMenu, fetchStockData]);
+
+  const formatLastUpdated = (date) => {
+    if (!date) return null;
+    return date.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  };
+
+  const openNewsLink = (url) => window.open(url, '_blank');
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+
+      {/* 종목 버튼 바 */}
+      <div style={{ display: 'flex', overflowX: 'auto', padding: '10px', gap: '8px', backgroundColor: 'white', whiteSpace: 'nowrap', borderBottom: '1px solid #ddd', flexShrink: 0 }}>
+        {favoriteStocks.length > 0
+          ? favoriteStocks.map(stock => (
+              <button key={stock.id} onClick={() => setActiveStock(stock)}
+                style={{ padding: '8px 16px', borderRadius: '20px', border: 'none', backgroundColor: activeStock?.id === stock.id ? '#34a853' : '#e6f4ea', color: activeStock?.id === stock.id ? 'white' : '#137333', fontWeight: 'bold', cursor: 'pointer', transition: 'all 0.2s', flexShrink: 0 }}>
+                {stock.name}
+              </button>
+            ))
+          : <span style={{ color: '#888', fontSize: '0.85rem', padding: '8px 5px' }}>⚙️ 설정에서 관심 종목을 먼저 등록해주세요.</span>
+        }
+      </div>
+
+      {/* 스크롤 컨테이너 */}
+      <div style={{ flex: 1, padding: '15px', overflowY: 'auto' }}>
+
+        {/* 갱신 시간 + 새로고침 */}
+        {activeStock && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+            <span style={{ fontSize: '0.75rem', color: '#aaa' }}>
+              {lastUpdated ? `🕐 ${formatLastUpdated(lastUpdated)} 갱신` : ''}
+            </span>
+            <button onClick={() => fetchStockData(false)}
+              style={{ fontSize: '0.75rem', padding: '4px 10px', backgroundColor: '#f1f3f4', border: '1px solid #ddd', borderRadius: '12px', cursor: 'pointer', color: '#5f6368' }}>
+              🔄 새로고침
+            </button>
+          </div>
+        )}
+
+        {/* 종목 미선택 */}
+        {!activeStock && favoriteStocks.length > 0 && (
+          <div style={{ textAlign: 'center', padding: '40px 20px', color: '#888' }}>위에서 종목을 선택해주세요.</div>
+        )}
+
+        {/* 주식 시세 카드 */}
+        {activeStock && (
+          <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '12px', marginBottom: '20px', boxShadow: '0 2px 5px rgba(0,0,0,0.08)', textAlign: 'center' }}>
+            <h2 style={{ margin: '0 0 10px 0', fontSize: '1.2rem', color: '#202124' }}>
+              {activeStock.name}
+              <span style={{ fontSize: '0.85rem', color: '#888', fontWeight: 'normal', marginLeft: '6px' }}>({activeStock.ticker})</span>
+            </h2>
+            {stockDetail ? (
+              <div>
+                <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#202124', marginBottom: '5px' }}>
+                  {stockDetail.price?.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                </div>
+                <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: stockDetail.diff > 0 ? '#d93025' : stockDetail.diff < 0 ? '#1a73e8' : '#5f6368' }}>
+                  {stockDetail.diff > 0 ? '▲' : stockDetail.diff < 0 ? '▼' : '-'}{' '}
+                  {Math.abs(stockDetail.diff)?.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}{' '}
+                  ({stockDetail.diff > 0 ? '+' : ''}{stockDetail.diff_percent}%)
+                </div>
+              </div>
+            ) : (
+              <div style={{ color: '#aaa', fontSize: '0.9rem' }}>시세 정보를 불러오는 중...</div>
+            )}
+          </div>
+        )}
+
+        {/* 관련 뉴스 */}
+        {isLoading ? (
+          <div style={{ textAlign: 'center', padding: '50px', color: '#888' }}>로딩 중...</div>
+        ) : (
+          <>
+            {newsList.length > 0 && (
+              <h3 style={{ fontSize: '1rem', color: '#137333', marginBottom: '12px', marginTop: 0 }}>
+                📰 {activeStock?.name} 관련 최신 뉴스
+              </h3>
+            )}
+            {newsList.map((news) => (
+              <div key={news.id} onClick={() => openNewsLink(news.url)}
+                style={{ backgroundColor: 'white', padding: '15px', borderRadius: '12px', marginBottom: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.08)', cursor: 'pointer', transition: 'box-shadow 0.2s' }}
+                onMouseEnter={e => e.currentTarget.style.boxShadow = '0 3px 8px rgba(0,0,0,0.15)'}
+                onMouseLeave={e => e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.08)'}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <span style={{ fontSize: '0.75rem', color: '#137333', fontWeight: 'bold' }}>
+                    {ALL_CATEGORIES.find(c => c.id === news.category_code)?.name || '관련뉴스'}
+                  </span>
+                  <span style={{ fontSize: '0.75rem', color: '#999' }}>{news.created_at}</span>
+                </div>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '1rem', color: '#202124', lineHeight: '1.4' }}>{news.title}</h3>
+                <p style={{ margin: 0, fontSize: '0.875rem', color: '#5f6368', display: '-webkit-box', WebkitLineClamp: '2', WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                  {news.ai_summary}
+                </p>
+              </div>
+            ))}
+            {activeStock && newsList.length === 0 && !isLoading && (
+              <div style={{ textAlign: 'center', padding: '30px', color: '#888' }}>해당 종목과 관련된 최근 뉴스가 없습니다.</div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
