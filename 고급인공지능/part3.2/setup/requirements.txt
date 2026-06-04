@@ -2,7 +2,6 @@ fastapi
 uvicorn
 pydantic
 google-generativeai
-google-genai
 python-dotenv
 pillow
 pywin32
@@ -17,9 +16,3 @@ winrt-Windows.Foundation
 winrt-Windows.Foundation.Collections
 schedule
 beautifulsoup4
-yfinance
-finance-datareader
-pandas
-pyaudio
-openwakeword
-onnxruntime

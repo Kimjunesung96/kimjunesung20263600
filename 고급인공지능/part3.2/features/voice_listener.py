@@ -2,12 +2,17 @@ import threading
 import asyncio
 import json
 import time
+import os
+import datetime
+import sqlite3
 import numpy as np
 import pyaudio
 import queue
+import tkinter as tk
 from openwakeword.model import Model
 from google import genai
 from google.genai import types
+from tkinter import simpledialog
 
 WAKEWORD = "hey_jarvis"
 NORMAL_THRESHOLD = 0.5
@@ -25,11 +30,35 @@ class VoiceListener:
         self._running = False
         self._listening = False
         self.last_interaction_time = 0
+        
+        # API 키 로직
         self.api_key = ""
+        config_data = {}
+        
         try:
-            with open("config.json", "r") as f:
-                self.api_key = json.load(f).get("gemini_api_key", "")
-        except Exception: pass
+            if os.path.exists("config.json"):
+                with open("config.json", "r", encoding="utf-8") as f:
+                    config_data = json.load(f)
+                    self.api_key = config_data.get("gemini_api_key", "").strip()
+        except Exception:
+            pass
+
+        if not self.api_key or self.api_key == "여기에_API키를_입력하세요":
+            new_key = simpledialog.askstring(
+                "🔑 Gemini API 키 필요",
+                "등록된 Gemini API 키가 없습니다.\n발급받으신 API 키를 입력해주세요.\n(입력 시 config.json에 자동 저장됩니다.)"
+            )
+            if new_key and new_key.strip():
+                self.api_key = new_key.strip()
+                config_data["gemini_api_key"] = self.api_key
+                try:
+                    with open("config.json", "w", encoding="utf-8") as f:
+                        json.dump(config_data, f, indent=4, ensure_ascii=False)
+                    self.show_bubble("🔑 API 키가 성공적으로 저장되었습니다!", "ALARM", 3000, True)
+                except Exception as e:
+                    print(f"API 키 저장 실패: {e}")
+            else:
+                self.show_bubble("⚠️ API 키가 없어 음성 비서 기능이 작동하지 않습니다.", "ALARM", 5000, True)
 
     def start(self):
         if self._running: return
@@ -72,32 +101,30 @@ class VoiceListener:
     async def _live_api_session(self, stream, pa):
         if not self.api_key: return
         client = genai.Client(api_key=self.api_key)
+        today_str = datetime.datetime.now().strftime("%Y-%m-%d")
         
-        # 💡 [업그레이드] 알람과 글자 찾기(find) 파라미터가 추가된 도구 스키마
         robot_tool = {
             "function_declarations": [
                 {
                     "name": "execute_robot_command",
-                    "description": "자비스 로봇의 UI 기능(타이머, 알람, 화면 캡처, 날씨, 주식, 달력, 폴더, 글자 찾기, 가이드)을 실행합니다.",
+                    "description": "자비스 로봇의 모든 제어 기능(화면 분석, 프로그램 실행, 알람 등)을 관장합니다.",
                     "parameters": {
                         "type": "OBJECT",
                         "properties": {
                             "action": {
                                 "type": "STRING",
-                                "description": "명령 종류: 'timer', 'alarm', 'screenshot', 'weather', 'stock', 'todo', 'folder', 'guide', 'find'"
+                                "description": "명령 종류: 'timer', 'alarm', 'add_schedule', 'analyze_screen', 'open_program', 'screenshot', 'weather', 'stock', 'todo', 'folder', 'guide', 'find'"
                             },
-                            "minutes": {
-                                "type": "INTEGER",
-                                "description": "타이머를 설정할 때의 분(minute) 단위 시간"
-                            },
-                            "alarm_time": {
+                            "analyze_prompt": {
                                 "type": "STRING",
-                                "description": "알람을 설정할 때의 시간 (반드시 'HH:MM' 형식, 예: '08:30', '14:00')"
+                                "description": "화면을 분석할 때 사용자의 구체적인 요구사항 (예: '한글로 번역해줘', '요약해줘')"
                             },
-                            "target_word": {
-                                "type": "STRING",
-                                "description": "화면에서 찾을 특정 글자나 단어"
-                            }
+                            "program_name": { "type": "STRING" },
+                            "minutes": { "type": "INTEGER" },
+                            "alarm_time": { "type": "STRING" },
+                            "target_word": { "type": "STRING" },
+                            "schedule_date": { "type": "STRING" },
+                            "schedule_content": { "type": "STRING" }
                         },
                         "required": ["action"]
                     }
@@ -105,15 +132,13 @@ class VoiceListener:
             ]
         }
 
-        # 💡 시스템 지침에 알람과 글자 찾기 사용법 명시
         config = types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             tools=[robot_tool],
             system_instruction=(
-                "너는 AI 비서 자비스야. 짧고 명확하게 한국어로 대답해줘. "
-                "사용자가 타이머, 알람, 화면 캡처, 날씨, 주식, 일정(달력), 폴더 열기, 가이드, 또는 화면에서 특정 글자 찾기를 요구하면, "
-                "말로 대답하는 것과 동시에 반드시 'execute_robot_command' 도구를 호출해서 기능을 실행시켜. "
-                "알람 설정 시 시간(HH:MM)을 'alarm_time' 파라미터로 넘겨주고, 글자 찾기 요구 시 찾을 단어를 'target_word' 파라미터로 넘겨줘."
+                f"너는 AI 비서 자비스야. 짧고 명확하게 한국어로 대답해줘. 오늘은 {today_str}이야. "
+                "1. 사용자가 현재 화면을 번역, 요약, 분석해달라고 하면 반드시 'analyze_screen' 액션을 호출하고, 'analyze_prompt' 파라미터에 요구사항을 적어줘. 대답은 '네, 화면을 분석해서 창으로 띄워드리겠습니다'라고만 해."
+                "2. 사용자가 프로그램을 열어달라고 하면 'open_program' 액션을 호출해."
             )
         )
         
@@ -138,15 +163,13 @@ class VoiceListener:
                 send_task = asyncio.create_task(send_mic())
                 
                 async for response in session.receive():
-                    # 툴 호출(명령) 감지
                     if response.tool_call:
                         for fc in response.tool_call.function_calls:
                             if fc.name == "execute_robot_command":
                                 args = dict(fc.args) if fc.args else {}
                                 print(f"\n⚡ [도구 호출 감지] 명령 실행: {args}")
-                                handle_voice_command(args, self.bot, self.show_bubble)
+                                handle_voice_command(args, self.bot, self.show_bubble, self)
 
-                    # 오디오 출력 처리
                     if response.server_content and response.server_content.model_turn:
                         for part in response.server_content.model_turn.parts:
                             if part.inline_data: 
@@ -165,25 +188,132 @@ class VoiceListener:
 # ---------------------------------------------------------
 # 🎮 명령 실행 핸들러 (로봇 연동)
 # ---------------------------------------------------------
-def handle_voice_command(result, bot, show_bubble_func):
+def handle_voice_command(result, bot, show_bubble_func, voice_listener_instance=None):
     action = result.get("action", "unknown")
 
-    if action == "timer":
+    # 💡 [핵심] 시각 전문 모델 백그라운드 호출 및 UI 창 팝업 로직
+    if action == "analyze_screen":
+        prompt = result.get("analyze_prompt", "이 화면을 한국어로 요약해줘.")
+        show_bubble_func("📸 캡처 완료! 시각 지능 모델이 분석 중...", "ALARM", 3000, True)
+        
+        def _analyze_task():
+            try:
+                from PIL import ImageGrab
+                # 실시간 통화용이 아닌, 정밀 분석용 시각 모델 클라이언트 호출
+                client = genai.Client(api_key=voice_listener_instance.api_key)
+                
+                img = ImageGrab.grab()
+                img.thumbnail((1200, 1200)) # 분석하기 딱 좋은 사이즈로 리사이징
+                
+                response = client.models.generate_content(
+                    model='gemini-3.1-flash-lite',
+                    contents=[prompt, img]
+                )
+                text_content = response.text
+                
+                # 분석이 끝나면 Tkinter 메인 스레드에서 예쁜 창 띄우기
+                def _create_win():
+                    win = tk.Toplevel(bot.root)
+                    win.title("자비스 시각 분석 결과")
+                    win.attributes("-topmost", True)
+                    win.geometry("550x650")
+                    win.configure(bg="#202124")
+                    
+                    lbl = tk.Label(win, text="👀 자비스 화면 분석 결과", bg="#202124", fg="#8ab4f8", font=("맑은 고딕", 14, "bold"))
+                    lbl.pack(pady=10)
+                    
+                    frame = tk.Frame(win, bg="#202124")
+                    frame.pack(expand=True, fill="both", padx=15, pady=(0, 15))
+                    
+                    scrollbar = tk.Scrollbar(frame)
+                    scrollbar.pack(side="right", fill="y")
+                    
+                    txt = tk.Text(frame, bg="#303134", fg="white", font=("맑은 고딕", 11), wrap="word", yscrollcommand=scrollbar.set, padx=10, pady=10)
+                    txt.pack(expand=True, fill="both")
+                    scrollbar.config(command=txt.yview)
+                    
+                    txt.insert("1.0", text_content)
+                    txt.config(state="disabled") # 복사는 되지만 쓰기는 금지
+                    show_bubble_func("✅ 화면 분석 완료! 창을 확인하세요.", "ALARM", 3000, True)
+                    
+                bot.root.after(0, _create_win)
+                
+            except Exception as e:
+                print(f"⚠️ 화면 분석 오류: {e}")
+                bot.root.after(0, lambda: show_bubble_func("❌ 분석 중 오류가 발생했습니다.", "ALARM", 3000, True))
+                
+        if voice_listener_instance and voice_listener_instance.api_key:
+            threading.Thread(target=_analyze_task, daemon=True).start()
+        else:
+            show_bubble_func("⚠️ API 키가 없습니다.", "ALARM", 3000, True)
+
+    elif action == "open_program":
+        prog = result.get("program_name", "").lower()
+        cmd = None
+        prog_display = prog
+        
+        if "vscode" in prog or "코드" in prog or "code" in prog:
+            cmd = "code"
+            prog_display = "VS Code"
+        elif "계산기" in prog or "calc" in prog:
+            cmd = "calc"
+            prog_display = "계산기"
+        elif "메모장" in prog or "notepad" in prog:
+            cmd = "notepad"
+            prog_display = "메모장"
+        elif "크롬" in prog or "chrome" in prog or "인터넷" in prog or "브라우저" in prog:
+            cmd = "start chrome"
+            prog_display = "Chrome"
+        elif "프롬프트" in prog or "cmd" in prog or "터미널" in prog:
+            cmd = "start cmd"
+            prog_display = "명령 프롬프트"
+        elif "탐색기" in prog or "폴더" in prog or "explorer" in prog:
+            cmd = "explorer"
+            prog_display = "파일 탐색기"
+        elif "유튜브" in prog or "youtube" in prog:
+            cmd = "start https://www.youtube.com"
+            prog_display = "YouTube"
+        else:
+            cmd = f"start {prog}"
+            
+        if cmd:
+            try:
+                os.system(cmd)
+                show_bubble_func(f"🚀 [{prog_display}] 실행 완료!", "ALARM", 3000, True)
+            except Exception as e:
+                show_bubble_func(f"❌ 실행 실패: {prog_display}", "ALARM", 3000, True)
+
+    elif action == "add_schedule":
+        s_date = result.get("schedule_date")
+        s_content = result.get("schedule_content")
+        if s_date and s_content:
+            try:
+                conn = sqlite3.connect('news.db', timeout=30)
+                cursor = conn.cursor()
+                cursor.execute("INSERT INTO schedule (date, content) VALUES (?, ?)", (s_date, s_content))
+                conn.commit()
+                conn.close()
+                show_bubble_func(f"📅 {s_date}\n[{s_content}] 등록 완료!", "ALARM", 4000, True)
+            except Exception as e:
+                print(f"⚠️ 일정 DB 등록 에러: {e}")
+                show_bubble_func("❌ 일정 등록 중 오류가 발생했습니다.", "ALARM", 3000, True)
+        else:
+            bot.toggle_todo_bubbles()
+
+    elif action == "timer":
         minutes = int(result.get("minutes", 5))
         bot.start_timer(minutes)
         show_bubble_func(f"⏳ {minutes}분 타이머를 시작합니다.", "ALARM", 3000)
 
     elif action == "alarm":
-        # 💡 [신규] 팝업창 없이 즉시 알람 설정
         alarm_time = result.get("alarm_time")
         if alarm_time:
             bot.timer_alarm.target_alarm_time = alarm_time
             show_bubble_func(f"⏰ 오늘 {alarm_time}에 알람이 설정되었습니다!", "ALARM", 3000, True)
         else:
-            bot.set_alarm() # 시간이 없으면 기존 팝업창 띄우기
+            bot.set_alarm()
 
     elif action == "find":
-        # 💡 [신규] OCR 글자 추적 즉시 실행
         target_word = result.get("target_word")
         if target_word:
             bot.start_tracking_target_by_word(target_word)
