@@ -137,8 +137,9 @@ class VoiceListener:
             tools=[robot_tool],
             system_instruction=(
                 f"너는 AI 비서 자비스야. 짧고 명확하게 한국어로 대답해줘. 오늘은 {today_str}이야. "
-                "1. 사용자가 현재 화면을 번역, 요약, 분석해달라고 하면 반드시 'analyze_screen' 액션을 호출하고, 'analyze_prompt' 파라미터에 요구사항을 적어줘. 대답은 '네, 화면을 분석해서 창으로 띄워드리겠습니다'라고만 해."
-                "2. 사용자가 프로그램을 열어달라고 하면 'open_program' 액션을 호출해."
+                "1. 사용자가 화면을 번역, 요약, 분석해달라고 하면 'analyze_screen' 액션을 호출해. 대답은 '네, 분석 결과를 띄우겠습니다'라고만 해. "
+                "2. 사용자가 프로그램을 열어달라고 하면 'open_program' 액션을 호출해. "
+                "3. 🚨[절대 규칙] 사용자가 특정 글자나 단어를 '찾아줘'라고 하면 인터넷 검색이나 브라우저 실행을 절대 하지 마! 묻지도 따지지도 말고 무조건 화면 글자 찾기인 'find' 액션만 실행하고 'target_word'에 그 단어를 넣어."
             )
         )
         
@@ -151,14 +152,19 @@ class VoiceListener:
             async with client.aio.live.connect(model=LIVE_MODEL, config=config) as session:
                 print("🔊 자비스 연결됨...")
                 async def send_mic():
-                    while self._listening:
-                        raw = await asyncio.to_thread(stream.read, CHUNK, exception_on_overflow=False)
-                        audio_arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
-                        rms = int(np.sqrt(np.mean(audio_arr ** 2)))
-                        level = min(rms // 150, 20)
-                        bar = "█" * level + "░" * (20 - level)
-                        print(f"\r🎤 |{bar}| ", end="", flush=True)
-                        await session.send_realtime_input(audio=types.Blob(data=raw, mime_type=f"audio/pcm;rate={SAMPLE_RATE}"))
+                    try: # 💡 [추가] 서버가 일방적으로 끊었을 때를 대비한 안전망
+                        while self._listening:
+                            raw = await asyncio.to_thread(stream.read, CHUNK, exception_on_overflow=False)
+                            audio_arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+                            rms = int(np.sqrt(np.mean(audio_arr ** 2)))
+                            level = min(rms // 150, 20)
+                            bar = "█" * level + "░" * (20 - level)
+                            print(f"\r🎤 |{bar}| ", end="", flush=True)
+                            await session.send_realtime_input(audio=types.Blob(data=raw, mime_type=f"audio/pcm;rate={SAMPLE_RATE}"))
+                    except asyncio.CancelledError:
+                        pass # 정상적인 취소
+                    except Exception:
+                        pass # 통화가 끊겨서 생긴 에러는 무시하고 조용히 종료
                 
                 send_task = asyncio.create_task(send_mic())
                 

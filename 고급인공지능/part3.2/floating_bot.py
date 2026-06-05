@@ -10,7 +10,7 @@ from ui.toolbar_ui import ToolbarUI
 from ui.history_ui import HistoryUI
 from features.voice_listener import VoiceListener
 from bot_features import AssistantFeatures
-
+from features.terminal_hud import TerminalHUD
 # 💡 [복구] 뉴스 DB 조회 함수
 def get_news_from_db(limit, keyword=""):
     try:
@@ -57,7 +57,7 @@ if __name__ == "__main__":
     bubble = BubbleUI(root, None)
     bot = AssistantFeatures(root, face_label, bubble.show)
     bubble.bot = bot
-    
+    terminal_hud = TerminalHUD(root)
     # 💡 [해결] 툴바와 뉴스창에 필요한 함수들을 제대로 전달
     def open_and_close(url, win_type):
         import webbrowser
