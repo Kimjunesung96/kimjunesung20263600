@@ -15,6 +15,7 @@ winrt-Windows.Graphics.Imaging
 winrt-Windows.Storage.Streams
 winrt-Windows.Foundation
 winrt-Windows.Foundation.Collections
+winrt-Windows.Globalization
 schedule
 beautifulsoup4
 yfinance
@@ -23,4 +24,3 @@ pandas
 pyaudio
 openwakeword
 onnxruntime
-winrt-Windows.Globalization
