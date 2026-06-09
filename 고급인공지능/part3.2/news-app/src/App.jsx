@@ -98,7 +98,7 @@ export default function App() {
   const handleStocksChange = () => fetchStocks();
 
   return (
-    <div style={{ maxWidth: '500px', margin: '0 auto', backgroundColor: '#f5f5f5', minHeight: '100vh', display: 'flex', flexDirection: 'column', fontFamily: "'맑은 고딕', sans-serif" }}>
+    <div style={{ maxWidth: '500px', margin: '0 auto', backgroundColor: '#f5f5f5', height: '100vh', overflow: 'hidden', display: 'flex', flexDirection: 'column', fontFamily: "'맑은 고딕', sans-serif" }}>
 
       {/* 헤더 */}
       <div style={{ backgroundColor: '#1a73e8', color: 'white', paddingTop: '15px', textAlign: 'center', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>

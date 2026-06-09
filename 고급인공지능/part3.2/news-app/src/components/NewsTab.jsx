@@ -33,17 +33,17 @@ export default function NewsTab({
     alarmInterval,
   });
 
-  // 스크롤 바닥 감지 → 추가 로드
-  useEffect(() => {
-    const el = scrollContainerRef.current;
-    if (!el) return;
-    const handleScroll = () => {
-      const { scrollTop, scrollHeight, clientHeight } = el;
-      if (scrollHeight - scrollTop - clientHeight < 150) fetchMoreNews();
-    };
-    el.addEventListener('scroll', handleScroll);
-    return () => el.removeEventListener('scroll', handleScroll);
-  }, [fetchMoreNews]);
+  // 💡 스크롤 바닥 감지 → 추가 로드 (중복 호출 방지 안전장치 추가)
+  const handleScroll = (e) => {
+    const target = e.target;
+    // 💡 여유 공간을 150px로 넉넉하게 잡아서 스크롤이 끊기지 않게 합니다.
+    const isBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 150;
+    
+    // 바닥에 닿았고, 현재 로딩 중이 아니며, 더 가져올 뉴스가 있을 때만 실행
+    if (isBottom && !isLoadingMore && hasMore) {
+      fetchMoreNews();
+    }
+  };
 
   const formatLastUpdated = (date) => {
     if (!date) return null;
@@ -69,8 +69,12 @@ export default function NewsTab({
         }
       </div>
 
-      {/* 스크롤 컨테이너 */}
-      <div ref={scrollContainerRef} style={{ flex: 1, padding: '15px', overflowY: 'auto' }}>
+      {/* 💡 스크롤 컨테이너에 onScroll 센서 부착 */}
+      <div 
+        ref={scrollContainerRef} 
+        onScroll={handleScroll}
+        style={{ flex: 1, padding: '15px', overflowY: 'auto' }}
+      >
 
         {/* 갱신 시간 + 새로고침 */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>

@@ -3,12 +3,14 @@ import threading
 import time
 import io
 import asyncio
+import re
 from itertools import product
-from PIL import ImageGrab
-
+from collections import Counter
+from PIL import ImageGrab, Image
+from difflib import SequenceMatcher
 
 # ---------------------------------------------------------
-# 🎯 OCR 타겟 추적 기능
+# 🎯 OCR 타겟 추적 기능 (정확도 극강 향상 버전)
 # ---------------------------------------------------------
 class OcrFeature:
     def __init__(self, root, show_bubble_func):
@@ -55,13 +57,33 @@ class OcrFeature:
         canvas.bind("<Button-1>",  lambda e: box_win.destroy())
 
     # ---------------------------------------------------------
-    # 공통: Windows OCR 실행
+    # 💡 퍼지(Fuzzy) 문자열 매칭 (오타/공백/특수문자 무시)
+    # ---------------------------------------------------------
+    def _is_match(self, target, ocr_text):
+        t_clean = re.sub(r'\W+', '', target).lower()
+        o_clean = re.sub(r'\W+', '', ocr_text).lower()
+        
+        if not t_clean or not o_clean:
+            return False
+            
+        if t_clean in o_clean or o_clean in t_clean:
+            return True
+            
+        similarity = SequenceMatcher(None, t_clean, o_clean).ratio()
+        return similarity > 0.8
+
+    # ---------------------------------------------------------
+    # 공통: Windows OCR 실행 (2배 확대 적용)
     # ---------------------------------------------------------
     @staticmethod
     async def _run_ocr(pil_img, with_line_idx=False):
         from winrt.windows.media.ocr import OcrEngine
         from winrt.windows.graphics.imaging import BitmapDecoder
         from winrt.windows.storage.streams import InMemoryRandomAccessStream, DataWriter
+
+        scale = 2
+        width, height = pil_img.size
+        pil_img = pil_img.resize((width * scale, height * scale), Image.Resampling.LANCZOS)
 
         buf = io.BytesIO()
         pil_img.save(buf, format="PNG")
@@ -102,8 +124,8 @@ class OcrFeature:
                 r = word.bounding_rect
                 entry = {
                     "text": word.text,
-                    "x": int(r.x), "y": int(r.y),
-                    "w": int(r.width), "h": int(r.height),
+                    "x": int(r.x / scale), "y": int(r.y / scale),
+                    "w": int(r.width / scale), "h": int(r.height / scale),
                 }
                 if with_line_idx:
                     entry["line_idx"] = line_idx
@@ -140,7 +162,7 @@ class OcrFeature:
         def find_best_group(words):
             candidates = []
             for qw in query_words:
-                matched = [w for w in words if qw in w["text"] or w["text"] in qw]
+                matched = [w for w in words if self._is_match(qw, w["text"])]
                 if not matched:
                     return None, 0
                 candidates.append(matched[:3])
@@ -153,14 +175,20 @@ class OcrFeature:
             return best_group, best_score
 
         def get_bounding_box(group):
-            xs  = [w["x"]           for w in group]
-            ys  = [w["y"]           for w in group]
+            # 가장 많이 나온 line_idx 기준으로 같은 줄 단어만 필터링
+            common_line = Counter(w["line_idx"] for w in group).most_common(1)[0][0]
+            group = [w for w in group if w["line_idx"] == common_line]
+
+            xs  = [w["x"]          for w in group]
+            ys  = [w["y"]          for w in group]
             x2s = [w["x"] + w["w"] for w in group]
             y2s = [w["y"] + w["h"] for w in group]
             return min(xs), min(ys), max(x2s) - min(xs), max(y2s) - min(ys)
 
         def loop():
             self.stop_tracking = False
+            attempt = 0
+
             while not self.stop_tracking:
                 screen_img = ImageGrab.grab()
                 try:
@@ -175,10 +203,11 @@ class OcrFeature:
                         f"❌ OCR 오류\n{err[:50]}", "ALARM", 3000, True))
                     return
 
+                # 단어 1개짜리는 기존 로직 유지
                 if len(query_words) == 1:
                     found, seen = [], set()
                     for word in words:
-                        if target_text in word["text"] or word["text"] in target_text:
+                        if self._is_match(target_text, word["text"]):
                             key = (word["x"] // 50, word["y"] // 50)
                             if key not in seen:
                                 seen.add(key)
@@ -198,16 +227,38 @@ class OcrFeature:
                         time.sleep(1)
                     continue
 
+                # 다단어: 60점 기준으로 판단
                 best_group, best_score = find_best_group(words)
                 if best_group:
                     bx, by, bw, bh = get_bounding_box(best_group)
-                    self.root.after(0, lambda a=bx,b=by,c=bw,d=bh,s=best_score:
-                                    self._draw_red_box(a,b,c,d,1,s))
-                    self.root.after(0, lambda s=best_score:
-                        self.show_bubble(
-                            f"🎯 [{target_text}] 발견!\n근접도 점수: {s}점",
-                            "ALARM", 3000, True))
-                    break
+
+                    if best_score >= 60:
+                        # 60점 이상 → 바로 확정
+                        self.root.after(0, lambda a=bx,b=by,c=bw,d=bh,s=best_score:
+                                        self._draw_red_box(a,b,c,d,1,s))
+                        self.root.after(0, lambda s=best_score:
+                            self.show_bubble(
+                                f"🎯 [{target_text}] 발견!\n근접도 점수: {s}점",
+                                "ALARM", 3000, True))
+                        break
+                    else:
+                        attempt += 1
+                        if attempt >= 3:
+                            # 3번 시도해도 60점 미만 → 최선으로 박스 그리기
+                            self.root.after(0, lambda a=bx,b=by,c=bw,d=bh,s=best_score:
+                                            self._draw_red_box(a,b,c,d,1,s))
+                            self.root.after(0, lambda s=best_score:
+                                self.show_bubble(
+                                    f"🎯 [{target_text}] 발견! (최선)\n근접도 점수: {s}점",
+                                    "ALARM", 3000, True))
+                            break
+                        else:
+                            # 아직 3번 안 됐으면 박스 안 그리고 재시도
+                            self.root.after(0, lambda a=attempt:
+                                self.show_bubble(
+                                    f"🔍 더 정확한 위치 탐색 중... ({a}/3)",
+                                    "ALARM", 1500, True))
+                            time.sleep(0.5)
                 else:
                     self.root.after(0, lambda: self.show_bubble(
                         f"😅 [{target_text}] 못 찾음\n다시 시도...", "ALARM", 2000, True))
@@ -245,7 +296,7 @@ class OcrFeature:
 
                 found, seen = [], set()
                 for word in words:
-                    if target_text in word["text"] or word["text"] in target_text:
+                    if self._is_match(target_text, word["text"]):
                         key = (word["x"] // 50, word["y"] // 50)
                         if key not in seen:
                             seen.add(key)

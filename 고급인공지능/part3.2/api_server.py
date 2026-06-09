@@ -12,7 +12,7 @@ from core.database import init_db
 from api.news_api import router as news_router
 from api.stock_api import router as stock_router
 from api.schedule_api import router as schedule_router
-
+from api.settings_api import router as settings_router
 app = FastAPI()
 
 # CORS 설정
@@ -28,7 +28,7 @@ app.add_middleware(
 app.include_router(news_router)
 app.include_router(stock_router)
 app.include_router(schedule_router)
-
+app.include_router(settings_router)
 # ---------------------------------------------------------
 # 📈 주식 종목 데이터 캐싱 및 다운로드 로직
 # ---------------------------------------------------------

@@ -11,7 +11,7 @@ from ui.history_ui import HistoryUI
 from features.voice_listener import VoiceListener
 from bot_features import AssistantFeatures
 from features.terminal_hud import TerminalHUD
-# 💡 [복구] 뉴스 DB 조회 함수
+
 def get_news_from_db(limit, keyword=""):
     try:
         conn = get_db_connection()
@@ -32,7 +32,6 @@ def get_news_from_db(limit, keyword=""):
 def fetch_news_loop(bot, bubble):
     import time, random
     while True:
-        bot.check_alarm()
         s = get_settings()
         news = get_news_from_db(30, s["custom_keyword"])
         if news:
@@ -58,14 +57,13 @@ if __name__ == "__main__":
     bot = AssistantFeatures(root, face_label, bubble.show)
     bubble.bot = bot
     terminal_hud = TerminalHUD(root)
-    # 💡 [해결] 툴바와 뉴스창에 필요한 함수들을 제대로 전달
+
     def open_and_close(url, win_type):
         import webbrowser
         if url: webbrowser.open(url)
         if win_type == "history": history.hide()
 
     toolbar = ToolbarUI(root, bot)
-    # 핵심: get_news_from_db와 open_and_close를 역사창(HistoryUI)에 주입
     history = HistoryUI(root, get_news_from_db, open_and_close)
     
     handler = BotEventHandler(root, face_label, bot)

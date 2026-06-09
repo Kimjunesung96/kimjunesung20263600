@@ -39,6 +39,7 @@ class ToolbarUI:
         tk.Button(self.bar_frame, text="⏰ 알람", command=lambda: [self.bot.set_alarm(), self.hide()], **self.btn_style).pack(side="left", padx=3)
         tk.Button(self.bar_frame, text="📅 달력", command=self.bot.toggle_todo_bubbles, **self.btn_style).pack(side="left", padx=3)
         tk.Button(self.bar_frame, text="📸 캡처", command=lambda: [self.hide(), self.bot.start_screenshot()], **self.btn_style).pack(side="left", padx=3)
+        tk.Button(self.bar_frame, text="💬 질문", command=self.ask_ai_clipboard, **self.btn_style).pack(side="left", padx=3)
         tk.Button(self.bar_frame, text="📁 폴더", command=self.bot.toggle_folder_bubbles, **self.btn_style).pack(side="left", padx=3)
         tk.Button(self.bar_frame, text="📈 주식", command=self.bot.toggle_stock_bubbles, **self.btn_style).pack(side="left", padx=3)
         tk.Button(self.bar_frame, text="🧭 가이드", command=lambda: [self.hide(), self.bot.start_guide_mode()], **self.btn_style).pack(side="left", padx=3)
@@ -88,3 +89,10 @@ class ToolbarUI:
         else: x = sw - tw
         y = ry + (self.root.winfo_height() // 2) - (th // 2)
         self.toolbar_win.geometry(f"+{x}+{y}")
+
+    def ask_ai_clipboard(self):
+        self.hide()
+        from tkinter import simpledialog
+        question = simpledialog.askstring("자비스 질문", "클립보드 내용에 대해 무엇을 할까요?\n(예: 이 코드 버그 찾아줘, 한국어로 번역해줘)")
+        if question:
+            self.bot.process_clipboard_with_ai(question)

@@ -2,7 +2,13 @@
 chcp 65001 > nul
 cd /d "%~dp0"
 
+echo ========================================================
+echo 📦 [1단계] 윈도우 방해물 제거 및 Node.js(웹 엔진) 설치 중...
+echo ========================================================
+taskkill /F /IM msiexec.exe > nul 2>&1
+winget install OpenJS.NodeJS.LTS --source winget --accept-package-agreements --accept-source-agreements
 
+echo.
 echo ========================================================
 echo 🐍 [2단계] 파이썬 하청업체(부품) 모두 고용 중...
 echo ========================================================

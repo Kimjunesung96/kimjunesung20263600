@@ -81,3 +81,36 @@ def delete_favorite_stock(id: int):
     conn.commit()
     conn.close()
     return {"status": "success"}
+
+@router.get("/search_stock")
+def search_stock(name: str):
+    """이름으로 주식 종목을 실시간 검색하여 자동완성 목록을 제공합니다."""
+    # api_server에 캐싱된 주식 데이터(한국/미국)를 가져옵니다.
+    from api_server import get_krx, get_us 
+    
+    if not name or len(name) < 1:
+        return {"status": "success", "data": []}
+        
+    try:
+        df_krx = get_krx()
+        df_us = get_us()
+        
+        # 1. 한국 주식 및 미국 주식에서 이름이 포함된 종목 검색
+        krx_match = df_krx[df_krx['Name'].str.contains(name, case=False, na=False)]
+        us_match = df_us[df_us['Name'].str.contains(name, case=False, na=False)]
+        
+        results = []
+        
+        # 한국 주식 결과 추가 (최대 5개만)
+        for _, row in krx_match.head(5).iterrows():
+            ticker = f"{row['Code']}.KS" if row['Market'] == 'KOSPI' else f"{row['Code']}.KQ"
+            results.append({"name": row['Name'], "ticker": ticker})
+            
+        # 미국 주식 결과 추가 (최대 5개만)
+        for _, row in us_match.head(5).iterrows():
+            results.append({"name": row['Name'], "ticker": row['Symbol']})
+            
+        return {"status": "success", "data": results}
+        
+    except Exception as e:
+        return {"status": "error", "message": str(e)}

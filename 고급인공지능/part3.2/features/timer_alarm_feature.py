@@ -8,12 +8,12 @@ from tkinter import simpledialog
 # ---------------------------------------------------------
 class TimerAlarmFeature:
     def __init__(self, root, face_label, show_bubble_func):
-        self.root       = root
-        self.face_label = face_label
+        self.root        = root
+        self.face_label  = face_label
         self.show_bubble = show_bubble_func
 
-        self.timer_seconds    = 0
-        self.is_timer_running = False
+        self.timer_seconds     = 0
+        self.is_timer_running  = False
         self.target_alarm_time = ""
 
     # ---------------------------------------------------------
@@ -49,28 +49,39 @@ class TimerAlarmFeature:
     def set_alarm(self):
         time_str = simpledialog.askstring(
             "알람 설정",
-            "알람 시간을 입력하세요\n(예: 08:30, 14:00)"
+            "알람 시간을 입력하세요\n(예: 0830, 1400)"
         )
         if time_str:
-            self.target_alarm_time = time_str.strip()
+            time_str = time_str.strip().replace(":", "")
+            if len(time_str) == 4 and time_str.isdigit():
+                time_str = f"{time_str[:2]}:{time_str[2:]}"
+            self.target_alarm_time = time_str
             self.show_bubble(
                 f"오늘 {self.target_alarm_time}에 알람이 설정되었습니다!",
                 "ALARM", 3000, True
             )
+            self._check_alarm_loop()
 
-    def check_alarm(self):
-        if self.target_alarm_time:
-            now_str = datetime.datetime.now().strftime("%H:%M")
-            if now_str == self.target_alarm_time:
-                self.show_bubble(
-                    "⏰ 띠링! 설정하신 알람 시간입니다!\n좋은 하루 보내세요!",
-                    "ALARM", 10000, False
-                )
-                self.target_alarm_time = ""
+    def _check_alarm_loop(self):
+        if not self.target_alarm_time:
+            return  # 알람 없으면 그냥 종료
+
+        now_str = datetime.datetime.now().strftime("%H:%M")
+        if now_str == self.target_alarm_time:
+            self.target_alarm_time = ""
+            self.show_giant_alert("⏰ 알람!", "설정하신 알람 시간입니다!\n클릭하면 종료됩니다.")
+        else:
+            self.root.after(10000, self._check_alarm_loop)  # 10초마다 체크
 
     # ---------------------------------------------------------
-    # 🚨 전체화면 긴급 알림창
+    # 🚨 전체화면 긴급 알림창 (깜빡이기 추가)
     # ---------------------------------------------------------
+    def _blink_background(self, alert_win, toggle=[True]):
+        if alert_win.winfo_exists():
+            alert_win.configure(bg="black" if toggle[0] else "#d32f2f")
+            toggle[0] = not toggle[0]
+            self.root.after(500, lambda: self._blink_background(alert_win, toggle))
+
     def show_giant_alert(self, title, message):
         alert_win = tk.Toplevel(self.root)
         alert_win.attributes("-topmost", True)
@@ -110,3 +121,6 @@ class TimerAlarmFeature:
             font=("맑은 고딕", 12, "bold"),
             bg="#ffeb3b", fg="#5f6368"
         ).pack()
+
+        # 💡 깜빡이기 시작
+        self._blink_background(alert_win, [True])

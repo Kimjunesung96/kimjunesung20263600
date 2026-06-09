@@ -1,6 +1,6 @@
 import tkinter as tk
 import threading
-
+from features.face_feature import FaceFeature
 from features.weather_feature import WeatherFeature
 from features.timer_alarm_feature import TimerAlarmFeature
 from features.todo_feature import TodoFeature
@@ -9,7 +9,7 @@ from features.folder_feature import FolderFeature
 from features.stock_feature import StockFeature
 from features.ocr_feature import OcrFeature
 from features.guide_feature import GuideFeature
-
+from features.clipboard_ai_feature import ClipboardAiFeature
 
 # ---------------------------------------------------------
 # 🤖 AssistantFeatures — 모든 기능 조립
@@ -28,7 +28,10 @@ class AssistantFeatures:
         self.stock       = StockFeature(root, show_bubble_func)
         self.ocr         = OcrFeature(root, show_bubble_func)
         self.guide       = GuideFeature(root, show_bubble_func, self.ocr)
-
+        self.clipboard_ai = ClipboardAiFeature(root, show_bubble_func)
+        
+        # 💡 [추가] 얼굴 표정 컨트롤러 장착
+        self.face_ctrl    = FaceFeature(root, face_label)
         # ── 날씨 위젯 (루트 창에 직접 붙는 UI) ───────────
         self.weather_label = tk.Label(
             self.root,
@@ -102,6 +105,9 @@ class AssistantFeatures:
     # ── 가이드 & OCR (위임) ──────────────────────────────
     def start_guide_mode(self):
         self.guide.start_guide_mode()
+# ── [추가됨] 클립보드 AI (위임) ─────────────────────────────
+    def process_clipboard_with_ai(self, custom_prompt):
+        self.clipboard_ai.process_clipboard_with_ai(custom_prompt)
 
     def kill_all_tracking(self):
         self.ocr.kill_all_tracking()
@@ -111,3 +117,8 @@ class AssistantFeatures:
 
     def start_tracking_target_by_word(self, target_text):
         self.ocr.start_tracking_target_by_word(target_text)
+
+    # ── [추가됨] AI 표정 변화 컨트롤러 ─────────────────────────────
+    def set_face(self, face_text, size=45):
+        # 텍스트(표정)와 폰트 크기를 실시간으로 변경합니다.
+        self.root.after(0, lambda: self.face_label.config(text=face_text, font=("Arial", size)))
