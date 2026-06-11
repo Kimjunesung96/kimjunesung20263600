@@ -122,7 +122,7 @@ def search_mode(db_helper):
 def main():
     db_host = 'localhost'
     db_user = 'root'
-    db_password = 'rla1dbs2'
+    db_password = '//'
     db_database = 'testdb'
 
     csv_file_path = 'mars_weathers_data.CSV'
