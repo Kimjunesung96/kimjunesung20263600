@@ -1,0 +1,321 @@
+## 기본 라이브러리 임포트
+from datetime import datetime
+import os
+
+## 추가 라이브러리
+from collections import deque
+
+
+
+
+## 실행 함수
+def programStart():
+    print(getCurrentTimeStr(), "programStart() is started...")
+    ############################################################
+    ## 여기에 코드를 작성하세요.
+
+    # moveLRUD()
+    # timeCount()
+    
+    # knightMovable()
+    # stringReOrder()
+    # stringReOrder_1()
+
+
+    ############################################################
+    print(getCurrentTimeStr(), "programStart() is finished...")
+
+#########################################################################################
+#########################################################################################
+#########################################################################################
+## 숫자가 0만 있는 경우에도 0 출력하기
+def stringReOrder_1():
+    data = input("영어와 숫자차 포함된 문자열을 입력하세요: ")
+    result = []
+    value = 0
+    inIncludeNumber = False
+
+    # 문자를 하나씩 확인하며
+    for x in data:
+        # 알파벳인 경우 결과 리스트에 삽입
+        if x.isalpha():
+            result.append(x)
+        # 숫자는 따로 더하기
+        else:
+            value += int(x)
+            inIncludeNumber = True
+
+    # 알파벳을 오름차순으로 정렬
+    result.sort()
+
+    # 숫자가 하나라도 존재하는 경우 가장 뒤에 삽입
+    if inIncludeNumber:
+        result.append(str(value))
+
+    # 최종 결과 출력(리스트를 문자열로 변환하여 출력)
+    print(f"재정렬된 문자열(영문자 정렬 & 숫자 합계) = {''.join(result)}")
+
+
+def stringReOrder():
+    data = input("영어와 숫자차 포함된 문자열을 입력하세요: ")
+    result = []
+    value = 0
+
+    # 문자를 하나씩 확인하며
+    for x in data:
+        # 알파벳인 경우 결과 리스트에 삽입
+        if x.isalpha():
+            result.append(x)
+        # 숫자는 따로 더하기
+        else:
+            value += int(x)
+
+    # 알파벳을 오름차순으로 정렬
+    result.sort()
+
+    # 숫자가 하나라도 존재하는 경우 가장 뒤에 삽입
+    if value != 0:
+        result.append(str(value))
+
+    # 최종 결과 출력(리스트를 문자열로 변환하여 출력)
+    print(f"재정렬된 문자열(영문자 정렬 & 숫자 합계) = {''.join(result)}")
+
+
+def knightMovable():
+    # 현재 나이트의 위치 입력받기
+    input_data = input("현재 나이트의 위치를 입력하세요: ")
+    row = int(input_data[1])
+    
+    # 가로 위치에 대한 숫자 변환
+    column = int(ord(input_data[0])) - int(ord('a')) + 1
+
+    # 나이트가 이동할 수 있는 8가지 방향 정의
+    steps = [(-2, -1), (-1, -2), (1, -2), (2, -1), (2, 1), (1, 2), (-1, 2), (-2, 1)]
+
+    # 8가지 방향에 대하여 각 위치로 이동이 가능한지 확인
+    result = 0
+    for step in steps:
+        # 이동하고자 하는 위치 확인
+        next_row = row + step[0]
+        next_column = column + step[1]
+        # 해당 위치로 이동이 가능하다면 카운트 증가
+        if next_row >= 1 and next_row <= 8 and next_column >= 1 and next_column <= 8:
+            result += 1
+
+    print(f"이동 가능한 수 = {result}")
+
+
+
+
+def timeCount():
+    # H를 입력받기
+    h = int(input("끝 시(hour)를 입력하세요: "))
+    
+    # 시각 문자에 포함되어 있는지 체크할 숫자
+    checkNum = 3
+
+    count = 0
+    for i in range(h + 1):
+        for j in range(60):
+            for k in range(60):
+                # 매 시각 안에 '3'이 포함되어 있다면 카운트 증가
+                if str(checkNum) in str(i) + str(j) + str(k):
+                    count += 1
+
+    print(f"{checkNum}이 포함된 시각의 총 수 = {count}")
+
+
+def moveLRUD():
+    # N 입력받기
+    n = int(input("공간의 가로/세로 크기를 입력하세요: "))
+    x, y = 1, 1
+    plans = input("이동 계획(L, R, U, D)을 순서대로 입력하세요: ").split()
+
+    # L, R, U, D에 따른 이동 방향
+    dx = [0, 0, -1, 1]
+    dy = [-1, 1, 0, 0]
+    move_types = ['L', 'R', 'U', 'D']
+
+    # 이동 계획을 하나씩 확인
+    for plan in plans:
+        # 이동 후 좌표 구하기
+        for i in range(len(move_types)):
+            if plan == move_types[i]:
+                nx = x + dx[i]
+                ny = y + dy[i]
+        # 공간을 벗어나는 경우 무시
+        if nx < 1 or ny < 1 or nx > n or ny > n:
+            continue
+        # 이동 수행
+        x, y = nx, ny
+
+    print(f"최종 도착 위치는 ({x}, {y}) 입니다.")
+
+#########################################################################################
+#########################################################################################
+#########################################################################################
+##############################################################################
+## 시간 출력을 위한 함수
+def getCurrentTimeStr():
+    currentTimeStr = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    return f"[{currentTimeStr}]"
+
+def stackExam2():
+    #삽입(5)-삽입(2)-삽입(3)-삽입(7)-삭제()-삽입(1)-삽입(4)-삭제()
+    stack=[]
+    stack.append(5)
+    stack.append(2)
+    stack.append(3)
+    stack.append(7)
+    print(stack)
+    popdata=stack.pop()
+    print(popdata)
+    print(stack)
+    stack.append(1)
+    #stack.append(4)
+    #popdata=stack.pop()
+    #stack.append()
+    #stack.append()
+    #stack.append()
+    #stack.append()
+
+def queExam2():
+    queue=deque()
+    queue.append(5)
+    queue.append(2)
+    queue.append(3)
+    queue.append(7)
+    print(queue)
+    popData=queue.popleft()
+    print(popData)
+    queue.append(1)
+    queue.append(4)
+    print(queue)
+    popData=queue.popleft()
+    print(queue)
+    #queue.append()
+    
+def recursiveFunc_withFinish(i):
+    print(f"{i}번째 함수가 호출되었습니다")
+    if i==5:
+         return
+    print(f"{i}번째 함수에서,{i+1}번재 함수가 호출되었습니다")
+    recursiveFunc_withFinish(i+1)
+    print(f"{i}번쨰 함수를 종료합니다")
+        
+        
+def Facto(i):
+    j=1
+    n=1
+    for n in range(1,i+1):
+       j=n*j
+       print(j)
+
+
+
+def gcd(a,b):
+    print(f"gcd({a},{b})가 호출됨요")
+    if (a%b)==0:
+        return b
+
+    return gcd(a,a%b)
+
+def closeList():
+    graph=[[]for _ in range(3)]
+    
+    graph[0].append((1,7))
+    graph[0].append((2,5))
+    graph[1].append((0,7))
+    graph[2].append((0,5))
+    print(graph)
+
+def dfs(graph,v,visited):
+    
+    visited[v]=True
+    
+    print(v,end=' ')
+    
+    for i in graph[v]:
+        if not visited[i]:
+            dfs(graph,i,visited)
+    
+
+#graph=[[],[2,3,8],[1,7],[1,4,5],[3,5],[3,4],[7],[2,6,8],[1,7]]
+#visited=[False]*9
+#dfs(graph,1,visited)
+
+def bfs(graph,start,visited):
+    queue=deque([start])
+    visited[start]=True
+    
+    while queue:
+        v=queue.popleft()
+        print(v,end=' ')
+        
+        for i in graph[v]:
+            if not visited[i]:
+                queue.append(i)
+                visited[i]=True
+                
+#graph=[[],[2,3,8],[1,7],[1,4,5],[3,5],[3,4],[7],[2,6,8],[1,7]]
+#visited=[False]*9
+#bfs(graph,1,visited)
+
+def dfs_ice(graph, n, m, x, y):
+    
+    if x <= -1 or x >= n or y <= -1 or y >= m:
+        return False
+
+    if graph[x][y] == 0:
+        graph[x][y] = 1
+
+        dfs_ice(graph, n, m, x - 1, y)
+        dfs_ice(graph, n, m, x, y - 1)
+        dfs_ice(graph, n, m, x + 1, y)
+        dfs_ice(graph, n, m, x, y + 1)
+
+        return True
+
+    return False
+
+
+n, m = map(int, input().split())
+
+graph = []
+
+for i in range(n):
+    graph.append(list(map(int, input())))
+
+result = 0
+
+for i in range(n):
+    for j in range(m):
+        if dfs_ice(graph, n, m, i, j):
+            result += 1
+
+print(result)
+
+
+
+##############################################################################
+## 파이선 메인 함수, 파일을 실행시키면 여기부터 실행, 이 부분은 반드시 파일의 맨 마지막에 위치해야 함
+if __name__ == "__main__":
+    start_time = datetime.now()
+    print(getCurrentTimeStr(), "main Start..")
+    
+    ##############
+    ## 파이선의 메인 함수를 이용해서 실행할 함수
+    #programStart()
+    ##############
+    #stackExam2()
+    #queExam2()
+    #recursiveFunc_withFinish(50)
+    #Facto(2)
+    #a,b=192,162
+    #gcd(a,b)
+    #closeList()
+   # dfs(graph,1,visited)
+    #bfs(graph,1,visited)
+    #dfs_ice()
+    finish_time = datetime.now()
+    print(getCurrentTimeStr(), f"main Finish..({(finish_time - start_time).total_seconds()}s Elapsed)")
